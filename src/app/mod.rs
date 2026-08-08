@@ -6037,11 +6037,26 @@ last_pane = "prefix+tab"
         app.state.active = Some(0);
         app.state.selected = 0;
         app.state.confirm_close = false;
+        // Select "Close" by label; its index moved when Pin/Unpin was added.
+        let kind = state::ContextMenuKind::Workspace {
+            ws_idx: 1,
+            pinned: false,
+        };
+        let close_idx = state::ContextMenuState {
+            kind: kind.clone(),
+            x: 0,
+            y: 0,
+            list: state::MenuListState::new(0),
+        }
+        .items()
+        .iter()
+        .position(|item| *item == "Close")
+        .expect("workspace menu offers a close entry");
         app.state.context_menu = Some(state::ContextMenuState {
-            kind: state::ContextMenuKind::Workspace { ws_idx: 1 },
+            kind,
             x: 2,
             y: 2,
-            list: state::MenuListState::new(1),
+            list: state::MenuListState::new(close_idx),
         });
         app.state.mode = Mode::ContextMenu;
 

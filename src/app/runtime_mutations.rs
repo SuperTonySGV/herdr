@@ -45,6 +45,14 @@ impl App {
         self.dispatch_runtime_mutation(id, Method::WorkspaceRename(params))
     }
 
+    pub(crate) fn runtime_workspace_set_pinned(
+        &mut self,
+        id: &'static str,
+        params: crate::api::schema::WorkspaceSetPinnedParams,
+    ) -> String {
+        self.dispatch_runtime_mutation(id, Method::WorkspaceSetPinned(params))
+    }
+
     pub(crate) fn runtime_workspace_move(
         &mut self,
         id: &'static str,

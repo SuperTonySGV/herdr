@@ -802,13 +802,26 @@ pub(super) fn apply_context_menu_action(
             leave_modal(state);
         }
         (
-            ContextMenuKind::Workspace { ws_idx } | ContextMenuKind::GitWorkspace { ws_idx, .. },
+            ContextMenuKind::Workspace { ws_idx, .. }
+            | ContextMenuKind::GitWorkspace { ws_idx, .. },
             Some("Rename"),
         ) => {
             open_rename_workspace(state, terminal_runtimes, ws_idx);
         }
         (
-            ContextMenuKind::Workspace { ws_idx } | ContextMenuKind::GitWorkspace { ws_idx, .. },
+            ContextMenuKind::Workspace { ws_idx, .. }
+            | ContextMenuKind::GitWorkspace { ws_idx, .. },
+            Some("Pin" | "Unpin"),
+        ) => {
+            if let Some(ws) = state.workspaces.get_mut(ws_idx) {
+                ws.pinned = !ws.pinned;
+                state.mark_session_dirty();
+            }
+            leave_modal(state);
+        }
+        (
+            ContextMenuKind::Workspace { ws_idx, .. }
+            | ContextMenuKind::GitWorkspace { ws_idx, .. },
             Some("Close" | "Close group"),
         ) => {
             state.selected = ws_idx;
@@ -1232,12 +1245,35 @@ impl App {
                 leave_modal(&mut self.state);
             }
             (
-                ContextMenuKind::Workspace { ws_idx }
+                ContextMenuKind::Workspace { ws_idx, .. }
                 | ContextMenuKind::GitWorkspace { ws_idx, .. },
                 Some("Rename"),
             ) => open_rename_workspace(&mut self.state, &self.terminal_runtimes, ws_idx),
             (
-                ContextMenuKind::Workspace { ws_idx }
+                ContextMenuKind::Workspace { ws_idx, .. }
+                | ContextMenuKind::GitWorkspace { ws_idx, .. },
+                Some("Pin" | "Unpin"),
+            ) => {
+                // Pinning is server-owned session state, so go through the
+                // runtime mutation path rather than mutating AppState here.
+                let target = self
+                    .state
+                    .workspaces
+                    .get(ws_idx)
+                    .map(|ws| (self.public_workspace_id(ws_idx), !ws.pinned));
+                if let Some((workspace_id, pinned)) = target {
+                    self.runtime_workspace_set_pinned(
+                        "tui:workspace:set_pinned",
+                        crate::api::schema::WorkspaceSetPinnedParams {
+                            workspace_id,
+                            pinned,
+                        },
+                    );
+                }
+                leave_modal(&mut self.state);
+            }
+            (
+                ContextMenuKind::Workspace { ws_idx, .. }
                 | ContextMenuKind::GitWorkspace { ws_idx, .. },
                 Some("Close" | "Close group"),
             ) => {
@@ -2182,6 +2218,7 @@ mod tests {
                 is_linked_worktree: false,
                 has_worktree_children: true,
                 collapsed: false,
+                pinned: false,
             },
             x: 0,
             y: 0,
@@ -2189,7 +2226,16 @@ mod tests {
         };
         let mut terminal_runtimes = crate::terminal::TerminalRuntimeRegistry::new();
 
-        apply_context_menu_action(&mut state, &mut terminal_runtimes, menu, 1);
+        // Resolve by label rather than a literal index: the entry list grows
+        // (Pin/Unpin was inserted before Close), and a stale index would
+        // silently exercise the wrong action instead of failing loudly.
+        let close_idx = menu
+            .items()
+            .iter()
+            .position(|item| *item == "Close group")
+            .expect("group menu offers a close entry");
+
+        apply_context_menu_action(&mut state, &mut terminal_runtimes, menu, close_idx);
 
         assert_eq!(state.selected, 0);
         assert_eq!(state.mode, Mode::ConfirmClose);

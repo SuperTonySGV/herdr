@@ -1056,9 +1056,13 @@ impl AppState {
                                 collapsed: group_state
                                     .as_ref()
                                     .is_some_and(|(_, collapsed)| *collapsed),
+                                pinned: ws.pinned,
                             })
                         })
-                        .unwrap_or(ContextMenuKind::Workspace { ws_idx: idx });
+                        .unwrap_or(ContextMenuKind::Workspace {
+                            ws_idx: idx,
+                            pinned: self.workspaces.get(idx).is_some_and(|ws| ws.pinned),
+                        });
                     self.context_menu = Some(ContextMenuState {
                         kind,
                         x: mouse.column,
@@ -2781,7 +2785,10 @@ mod tests {
     fn hovering_context_menu_updates_highlight() {
         let mut app = app_for_mouse_test();
         app.state.context_menu = Some(ContextMenuState {
-            kind: ContextMenuKind::Workspace { ws_idx: 0 },
+            kind: ContextMenuKind::Workspace {
+                ws_idx: 0,
+                pinned: false,
+            },
             x: 2,
             y: 2,
             list: MenuListState::new(0),
@@ -3074,11 +3081,27 @@ mod tests {
         app.state.selected = 0;
         app.state.mode = Mode::Terminal;
 
+        // Select "Close" by label; its index moved when Pin/Unpin was added.
+        let kind = ContextMenuKind::Workspace {
+            ws_idx: 1,
+            pinned: false,
+        };
+        let close_idx = ContextMenuState {
+            kind: kind.clone(),
+            x: 0,
+            y: 0,
+            list: MenuListState::new(0),
+        }
+        .items()
+        .iter()
+        .position(|item| *item == "Close")
+        .expect("workspace menu offers a close entry");
+
         app.state.context_menu = Some(ContextMenuState {
-            kind: ContextMenuKind::Workspace { ws_idx: 1 },
+            kind,
             x: 2,
             y: 2,
-            list: MenuListState::new(1),
+            list: MenuListState::new(close_idx),
         });
         app.state.mode = Mode::ContextMenu;
         handle_context_menu_key(
@@ -3114,11 +3137,27 @@ mod tests {
         app.state.active = Some(0);
         app.state.selected = 0;
         app.state.confirm_close = false;
+        let kind = ContextMenuKind::Workspace {
+            ws_idx: 1,
+            pinned: false,
+        };
+        // Click the "Close" row by label; its index moved when Pin/Unpin was
+        // added, and rows are laid out one per entry below the top border.
+        let close_idx = ContextMenuState {
+            kind: kind.clone(),
+            x: 0,
+            y: 0,
+            list: MenuListState::new(0),
+        }
+        .items()
+        .iter()
+        .position(|item| *item == "Close")
+        .expect("workspace menu offers a close entry");
         app.state.context_menu = Some(ContextMenuState {
-            kind: ContextMenuKind::Workspace { ws_idx: 1 },
+            kind,
             x: 2,
             y: 2,
-            list: MenuListState::new(1),
+            list: MenuListState::new(close_idx),
         });
         app.state.mode = Mode::ContextMenu;
 
@@ -3126,7 +3165,7 @@ mod tests {
         app.handle_mouse(mouse(
             MouseEventKind::Down(MouseButton::Left),
             menu.x + 2,
-            menu.y + 2,
+            menu.y + 1 + close_idx as u16,
         ));
 
         assert_eq!(app.state.workspaces.len(), 1);

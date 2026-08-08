@@ -1148,12 +1148,16 @@ pub(crate) struct TabPressState {
 pub enum ContextMenuKind {
     Workspace {
         ws_idx: usize,
+        /// Snapshot taken when the menu opens, so the entry can read "Pin" or
+        /// "Unpin". Same pattern as `collapsed` below.
+        pinned: bool,
     },
     GitWorkspace {
         ws_idx: usize,
         is_linked_worktree: bool,
         has_worktree_children: bool,
         collapsed: bool,
+        pinned: bool,
     },
     Tab {
         ws_idx: usize,
@@ -1169,6 +1173,15 @@ pub enum ContextMenuKind {
     },
 }
 
+/// Menu entry label for the pin toggle, reflecting the current state.
+fn pin_label(pinned: bool) -> &'static str {
+    if pinned {
+        "Unpin"
+    } else {
+        "Pin"
+    }
+}
+
 /// Right-click context menu state.
 pub struct ContextMenuState {
     pub kind: ContextMenuKind,
@@ -1180,23 +1193,40 @@ pub struct ContextMenuState {
 impl ContextMenuState {
     pub fn items(&self) -> Vec<&'static str> {
         match self.kind {
-            ContextMenuKind::Workspace { .. } => vec!["Rename", "Close"],
+            ContextMenuKind::Workspace { pinned, .. } => {
+                vec!["Rename", pin_label(pinned), "Close"]
+            }
             ContextMenuKind::GitWorkspace {
                 is_linked_worktree: false,
                 has_worktree_children: false,
+                pinned,
                 ..
-            } => vec!["Rename", "Close", "New worktree", "Open worktree..."],
+            } => vec![
+                "Rename",
+                pin_label(pinned),
+                "Close",
+                "New worktree",
+                "Open worktree...",
+            ],
             ContextMenuKind::GitWorkspace {
                 is_linked_worktree: true,
+                pinned,
                 ..
-            } => vec!["Rename", "Close", "Delete worktree checkout..."],
+            } => vec![
+                "Rename",
+                pin_label(pinned),
+                "Close",
+                "Delete worktree checkout...",
+            ],
             ContextMenuKind::GitWorkspace {
                 is_linked_worktree: false,
                 has_worktree_children: true,
                 collapsed,
+                pinned,
                 ..
             } => vec![
                 "Rename",
+                pin_label(pinned),
                 "Close group",
                 "New worktree",
                 "Open worktree...",
@@ -2152,7 +2182,7 @@ impl AppState {
         }
         if let Some(menu) = &self.context_menu {
             match menu.kind {
-                ContextMenuKind::Workspace { ws_idx }
+                ContextMenuKind::Workspace { ws_idx, .. }
                 | ContextMenuKind::GitWorkspace { ws_idx, .. } => {
                     assert_workspace_index(ws_idx, "context menu workspace")
                 }
@@ -2396,6 +2426,7 @@ mod tests {
                 is_linked_worktree: true,
                 has_worktree_children: false,
                 collapsed: false,
+                pinned: false,
             },
             x: 0,
             y: 0,
@@ -2404,7 +2435,7 @@ mod tests {
 
         assert_eq!(
             menu.items(),
-            &["Rename", "Close", "Delete worktree checkout..."]
+            &["Rename", "Pin", "Close", "Delete worktree checkout..."]
         );
     }
 
@@ -2416,6 +2447,7 @@ mod tests {
                 is_linked_worktree: false,
                 has_worktree_children: false,
                 collapsed: false,
+                pinned: false,
             },
             x: 0,
             y: 0,
@@ -2424,7 +2456,7 @@ mod tests {
 
         assert_eq!(
             menu.items(),
-            &["Rename", "Close", "New worktree", "Open worktree..."]
+            &["Rename", "Pin", "Close", "New worktree", "Open worktree..."]
         );
     }
 
@@ -2436,6 +2468,7 @@ mod tests {
                 is_linked_worktree: false,
                 has_worktree_children: true,
                 collapsed: false,
+                pinned: false,
             },
             x: 0,
             y: 0,
@@ -2446,10 +2479,63 @@ mod tests {
             menu.items(),
             &[
                 "Rename",
+                "Pin",
                 "Close group",
                 "New worktree",
                 "Open worktree...",
                 "Collapse"
+            ]
+        );
+    }
+
+    #[test]
+    fn workspace_context_menu_offers_pin_and_flips_to_unpin() {
+        let unpinned = ContextMenuState {
+            kind: ContextMenuKind::Workspace {
+                ws_idx: 0,
+                pinned: false,
+            },
+            x: 0,
+            y: 0,
+            list: MenuListState::new(0),
+        };
+        assert_eq!(unpinned.items(), &["Rename", "Pin", "Close"]);
+
+        let pinned = ContextMenuState {
+            kind: ContextMenuKind::Workspace {
+                ws_idx: 0,
+                pinned: true,
+            },
+            x: 0,
+            y: 0,
+            list: MenuListState::new(0),
+        };
+        assert_eq!(pinned.items(), &["Rename", "Unpin", "Close"]);
+    }
+
+    #[test]
+    fn pinned_git_workspace_context_menu_offers_unpin() {
+        let menu = ContextMenuState {
+            kind: ContextMenuKind::GitWorkspace {
+                ws_idx: 0,
+                is_linked_worktree: false,
+                has_worktree_children: false,
+                collapsed: false,
+                pinned: true,
+            },
+            x: 0,
+            y: 0,
+            list: MenuListState::new(0),
+        };
+
+        assert_eq!(
+            menu.items(),
+            &[
+                "Rename",
+                "Unpin",
+                "Close",
+                "New worktree",
+                "Open worktree..."
             ]
         );
     }
