@@ -197,6 +197,10 @@ pub struct Workspace {
     pub(crate) next_public_tab_number: usize,
     pub tabs: Vec<Tab>,
     pub active_tab: usize,
+    /// Pinned workspaces survive losing their last tab: instead of closing, they
+    /// are re-seeded with a fresh tab at `identity_cwd`. Shared session state, so
+    /// it persists across snapshot/restore and is reported through the API.
+    pub pinned: bool,
     #[cfg(test)]
     pub(crate) test_runtimes: HashMap<PaneId, TerminalRuntime>,
 }
@@ -262,6 +266,7 @@ impl Workspace {
             next_public_tab_number: 2,
             tabs: vec![tab],
             active_tab: 0,
+            pinned: false,
             #[cfg(test)]
             test_runtimes: HashMap::new(),
         }
@@ -461,6 +466,7 @@ impl Workspace {
                 next_public_tab_number: 2,
                 tabs: vec![tab],
                 active_tab: 0,
+                pinned: false,
                 #[cfg(test)]
                 test_runtimes: HashMap::new(),
             },
@@ -1299,6 +1305,7 @@ impl Workspace {
             next_public_tab_number: 2,
             tabs: vec![tab],
             active_tab: 0,
+            pinned: false,
             test_runtimes: HashMap::new(),
         }
     }

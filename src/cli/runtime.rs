@@ -42,6 +42,15 @@ pub(super) fn workspace_rename(params: WorkspaceRenameParams) -> std::io::Result
     print_method_response("cli:workspace:rename", Method::WorkspaceRename(params))
 }
 
+pub(super) fn workspace_set_pinned(
+    params: crate::api::schema::WorkspaceSetPinnedParams,
+) -> std::io::Result<i32> {
+    print_method_response(
+        "cli:workspace:set_pinned",
+        Method::WorkspaceSetPinned(params),
+    )
+}
+
 pub(super) fn workspace_close(workspace_id: String) -> std::io::Result<i32> {
     print_method_response(
         "cli:workspace:close",

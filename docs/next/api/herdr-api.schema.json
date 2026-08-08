@@ -1092,6 +1092,11 @@
               "minimum": 0,
               "type": "integer"
             },
+            "pinned": {
+              "default": false,
+              "description": "Pinned workspaces are re-seeded with a fresh tab instead of closing when\ntheir last tab or pane goes away.",
+              "type": "boolean"
+            },
             "tab_count": {
               "format": "uint",
               "minimum": 0,
@@ -4269,6 +4274,21 @@
           ],
           "type": "object"
         },
+        "WorkspaceSetPinnedParams": {
+          "properties": {
+            "pinned": {
+              "type": "boolean"
+            },
+            "workspace_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "workspace_id",
+            "pinned"
+          ],
+          "type": "object"
+        },
         "WorkspaceTarget": {
           "properties": {
             "workspace_id": {
@@ -4658,6 +4678,22 @@
             },
             "params": {
               "$ref": "#/schemas/request/$defs/WorkspaceRenameParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "workspace.set_pinned",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/WorkspaceSetPinnedParams"
             }
           },
           "required": [
@@ -9940,6 +9976,11 @@
               "format": "uint",
               "minimum": 0,
               "type": "integer"
+            },
+            "pinned": {
+              "default": false,
+              "description": "Pinned workspaces are re-seeded with a fresh tab instead of closing when\ntheir last tab or pane goes away.",
+              "type": "boolean"
             },
             "tab_count": {
               "format": "uint",

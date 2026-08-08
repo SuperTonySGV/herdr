@@ -16,6 +16,8 @@ pub(super) fn run_workspace_command(args: &[String]) -> std::io::Result<i32> {
         "get" => workspace_get(&args[1..]),
         "focus" => workspace_focus(&args[1..]),
         "rename" => workspace_rename(&args[1..]),
+        "pin" => workspace_set_pinned(&args[1..], true),
+        "unpin" => workspace_set_pinned(&args[1..], false),
         "report-metadata" => workspace_report_metadata(&args[1..]),
         "close" => workspace_close(&args[1..]),
         "help" | "--help" | "-h" => {
@@ -27,6 +29,19 @@ pub(super) fn run_workspace_command(args: &[String]) -> std::io::Result<i32> {
             Ok(2)
         }
     }
+}
+
+fn workspace_set_pinned(args: &[String], pinned: bool) -> std::io::Result<i32> {
+    let verb = if pinned { "pin" } else { "unpin" };
+    if args.len() != 1 {
+        eprintln!("usage: herdr workspace {verb} <workspace-id>");
+        return Ok(2);
+    }
+
+    super::runtime::workspace_set_pinned(crate::api::schema::WorkspaceSetPinnedParams {
+        workspace_id: super::normalize_workspace_id(&args[0]),
+        pinned,
+    })
 }
 
 fn workspace_list(args: &[String]) -> std::io::Result<i32> {
@@ -244,6 +259,8 @@ fn print_workspace_help() {
     eprintln!("  herdr workspace get <workspace_id>");
     eprintln!("  herdr workspace focus <workspace_id>");
     eprintln!("  herdr workspace rename <workspace_id> <label>");
+    eprintln!("  herdr workspace pin <workspace_id>");
+    eprintln!("  herdr workspace unpin <workspace_id>");
     eprintln!("  herdr workspace report-metadata <workspace_id> --source ID [--token NAME=VALUE] [--clear-token NAME] [--seq N] [--ttl-ms N]");
     eprintln!("  herdr workspace close <workspace_id>");
 }

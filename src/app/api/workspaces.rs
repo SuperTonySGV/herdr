@@ -118,6 +118,28 @@ impl App {
         )
     }
 
+    pub(super) fn handle_workspace_set_pinned(
+        &mut self,
+        id: String,
+        params: crate::api::schema::WorkspaceSetPinnedParams,
+    ) -> String {
+        let Some(index) = self.parse_workspace_id(&params.workspace_id) else {
+            return workspace_not_found(id, &params.workspace_id);
+        };
+        let Some(ws) = self.state.workspaces.get_mut(index) else {
+            return workspace_not_found(id, &params.workspace_id);
+        };
+        ws.pinned = params.pinned;
+        self.schedule_session_save();
+
+        encode_success(
+            id,
+            ResponseResult::WorkspaceInfo {
+                workspace: self.workspace_info(index),
+            },
+        )
+    }
+
     pub(super) fn handle_workspace_move(
         &mut self,
         id: String,

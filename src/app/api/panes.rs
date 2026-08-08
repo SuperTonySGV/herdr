@@ -1568,6 +1568,11 @@ impl App {
                 "closing this pane would close a worktree group",
             ));
         }
+        // Give a pinned workspace its replacement tab before the last pane goes,
+        // so `close_pane` below sees a second tab and reports no close.
+        if self.state.close_pane_would_close_workspace(ws_idx, pane_id) {
+            self.reseed_pinned_workspace(ws_idx);
+        }
         let workspace_snapshot = self.workspace_info(ws_idx);
         let terminal_id = self.state.terminal_id_for_pane(ws_idx, pane_id);
         let should_close_workspace = {

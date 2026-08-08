@@ -178,6 +178,23 @@ fn generated_protocol_schema_artifact_is_current() {
 }
 
 #[test]
+fn request_round_trips_for_workspace_set_pinned() {
+    let request = Request {
+        id: "req_pin".into(),
+        method: Method::WorkspaceSetPinned(crate::api::schema::WorkspaceSetPinnedParams {
+            workspace_id: "w1".into(),
+            pinned: true,
+        }),
+    };
+
+    let json = serde_json::to_value(&request).unwrap();
+    assert_eq!(json["method"], "workspace.set_pinned");
+    assert_eq!(json["params"]["pinned"], true);
+    let restored: Request = serde_json::from_value(json).unwrap();
+    assert_eq!(restored, request);
+}
+
+#[test]
 fn request_round_trips_for_server_stop() {
     let request = Request {
         id: "req_stop".into(),
@@ -703,6 +720,7 @@ fn worktree_request_and_response_round_trip() {
         id: "req_worktree".into(),
         result: ResponseResult::WorktreeCreated {
             workspace: WorkspaceInfo {
+                pinned: false,
                 workspace_id: "w_1".into(),
                 number: 2,
                 label: "herdr".into(),
@@ -789,6 +807,7 @@ fn worktree_lifecycle_events_round_trip() {
     assert_eq!(restored, subscription);
 
     let workspace = WorkspaceInfo {
+        pinned: false,
         workspace_id: "w_2".into(),
         number: 2,
         label: "herdr".into(),

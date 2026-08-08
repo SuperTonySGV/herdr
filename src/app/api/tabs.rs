@@ -129,6 +129,73 @@ impl App {
         }
     }
 
+    /// Seed a pinned workspace with a fresh tab so that removing its current last
+    /// tab cannot empty it.
+    ///
+    /// Callers invoke this *before* the removal that would otherwise close the
+    /// workspace. `Workspace` derefs to its active tab and panics when it has
+    /// none, so the replacement tab has to exist before the old one goes away —
+    /// the workspace must never be observably tab-less, not even transiently.
+    ///
+    /// Returns true when a tab was added, meaning the pending removal will now
+    /// leave the workspace alive and the caller should not close it.
+    pub(crate) fn reseed_pinned_workspace(&mut self, ws_idx: usize) -> bool {
+        let Some(ws) = self.state.workspaces.get(ws_idx) else {
+            return false;
+        };
+        if !ws.pinned {
+            return false;
+        }
+        // Pinning is anchored to the repo the space represents, not to whatever
+        // directory the dying pane happened to be sitting in.
+        let cwd = ws.identity_cwd.clone();
+        let (rows, cols) = self.state.estimate_pane_size();
+        let default_shell = self.state.default_shell.clone();
+        let scrollback_limit_bytes = self.state.pane_scrollback_limit_bytes;
+        let host_terminal_theme = self.state.host_terminal_theme;
+        let host_terminal_appearance = self.state.host_terminal_appearance;
+        let shell_mode = self.state.shell_mode;
+        let result = self
+            .state
+            .workspaces
+            .get_mut(ws_idx)
+            .ok_or_else(|| std::io::Error::other("workspace disappeared"))
+            .and_then(|ws| {
+                ws.create_tab(
+                    rows,
+                    cols,
+                    cwd,
+                    scrollback_limit_bytes,
+                    host_terminal_theme,
+                    host_terminal_appearance,
+                    crate::pane::PaneShellConfig::new(&default_shell, shell_mode),
+                    Vec::new(),
+                )
+            });
+        match result {
+            Ok((tab_idx, terminal, runtime)) => {
+                self.terminal_runtimes.insert(terminal.id.clone(), runtime);
+                self.state.terminals.insert(terminal.id.clone(), terminal);
+                self.state.remove_alias_shadowed_by_new_pane(
+                    self.state.workspaces[ws_idx].tabs[tab_idx].root_pane,
+                );
+                self.schedule_session_save();
+                self.emit_tab_created_events(ws_idx, tab_idx);
+                true
+            }
+            Err(err) => {
+                // Failing to spawn the replacement means we cannot keep the
+                // workspace alive; fall back to the normal close so we never
+                // leave a workspace without tabs.
+                tracing::warn!(
+                    error = %err,
+                    "failed to re-seed pinned workspace; falling back to closing it"
+                );
+                false
+            }
+        }
+    }
+
     pub(super) fn handle_tab_focus(&mut self, id: String, target: TabTarget) -> String {
         let Some((ws_idx, tab_idx)) = self.parse_tab_id(&target.tab_id) else {
             return tab_not_found(id, &target.tab_id);
@@ -235,13 +302,20 @@ impl App {
         let Some(ws) = self.state.workspaces.get(ws_idx) else {
             return tab_not_found(id, &target.tab_id);
         };
-        let closes_workspace = ws.tabs.len() <= 1;
+        let mut closes_workspace = ws.tabs.len() <= 1;
         let terminal_ids = self.state.terminal_ids_for_tab(ws_idx, tab_idx);
         let pane_ids = ws
             .tabs
             .get(tab_idx)
             .map(|tab| tab.layout.pane_ids())
             .unwrap_or_default();
+
+        // A pinned workspace gets a replacement tab first, so closing this one
+        // just removes a tab instead of taking the workspace with it. `tab_idx`
+        // stays valid because the new tab is appended after it.
+        if closes_workspace && self.reseed_pinned_workspace(ws_idx) {
+            closes_workspace = false;
+        }
 
         if closes_workspace {
             if self.state.confirm_implicit_worktree_group_close(ws_idx) {

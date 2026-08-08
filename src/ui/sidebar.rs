@@ -39,6 +39,10 @@ pub(crate) struct AgentPanelEntry {
     pub tokens: std::collections::HashMap<String, String>,
 }
 
+/// Prefix shown on pinned space rows. Single character so it costs the label at
+/// most two display columns in the narrow sidebar.
+pub(crate) const PINNED_SPACE_MARKER: char = '📌';
+
 fn sidebar_section_heights(total_h: u16, split_ratio: f32) -> (u16, u16) {
     if total_h == 0 {
         return (0, 0);
@@ -1276,6 +1280,14 @@ fn render_workspace_list(
             grouped_child_display_label(&label, ws.branch().as_deref(), ws.custom_name.is_some())
         } else {
             label
+        };
+        // Mark pinned spaces so it is obvious which rows survive losing their
+        // last tab. Prefixing the label keeps this working in every row layout
+        // and in the collapsed sidebar without a new token type.
+        let display_label = if ws.pinned {
+            format!("{PINNED_SPACE_MARKER} {display_label}")
+        } else {
+            display_label
         };
         let parent_group = (!card.indented)
             .then(|| workspace_parent_group_state(app, i))

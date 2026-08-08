@@ -284,6 +284,20 @@ impl App {
                 None
             };
         let terminal_cwd_reported = matches!(ev, AppEvent::TerminalCwdReported { .. });
+        // A dying last pane is the usual way a space empties out: the agent or
+        // shell exits on its own. Seed the pinned workspace's replacement tab
+        // before the death is processed, so the removal below no longer empties
+        // the workspace and `handle_pane_died` leaves it in place.
+        if let AppEvent::PaneDied { pane_id } = &ev {
+            if let Some((ws_idx, _)) = self.find_pane(*pane_id) {
+                if self
+                    .state
+                    .close_pane_would_close_workspace(ws_idx, *pane_id)
+                {
+                    self.reseed_pinned_workspace(ws_idx);
+                }
+            }
+        }
         let previous_toast = self.state.toast.clone();
         let pane_updates = self.state.handle_app_event(ev);
         if let Some(agents) = manifest_update_agents {
@@ -997,6 +1011,9 @@ impl App {
             }
             Method::WorkspaceRename(params) => {
                 return self.handle_workspace_rename(request.id, params);
+            }
+            Method::WorkspaceSetPinned(params) => {
+                return self.handle_workspace_set_pinned(request.id, params);
             }
             Method::WorkspaceMove(params) => {
                 return self.handle_workspace_move(request.id, params);

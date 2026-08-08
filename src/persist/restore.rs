@@ -425,6 +425,7 @@ fn restore_workspace(
             next_public_tab_number,
             active_tab: snap.active_tab.min(tabs.len().saturating_sub(1)),
             tabs,
+            pinned: snap.pinned,
             #[cfg(test)]
             test_runtimes: HashMap::new(),
         })
@@ -1173,6 +1174,7 @@ mod tests {
         let snapshot = SessionSnapshot {
             version: super::super::snapshot::SNAPSHOT_VERSION,
             workspaces: vec![WorkspaceSnapshot {
+                pinned: false,
                 id: Some("workspace".into()),
                 custom_name: None,
                 identity_cwd: cwd.clone(),
@@ -1253,6 +1255,7 @@ mod tests {
         let snapshot = SessionSnapshot {
             version: super::super::snapshot::SNAPSHOT_VERSION,
             workspaces: vec![WorkspaceSnapshot {
+                pinned: false,
                 id: Some("w1".into()),
                 custom_name: None,
                 identity_cwd: cwd.clone(),
@@ -1362,6 +1365,7 @@ mod tests {
         let snapshot = SessionSnapshot {
             version: super::super::snapshot::SNAPSHOT_VERSION,
             workspaces: vec![WorkspaceSnapshot {
+                pinned: false,
                 id: Some("w1".into()),
                 custom_name: None,
                 identity_cwd: cwd.clone(),
@@ -1445,6 +1449,7 @@ mod tests {
     fn legacy_restore_precomputes_missing_public_pane_numbers() {
         let cwd = std::env::current_dir().unwrap();
         let snapshot = WorkspaceSnapshot {
+            pinned: false,
             id: Some("w1".into()),
             custom_name: None,
             identity_cwd: cwd,
@@ -1693,6 +1698,7 @@ mod tests {
         let snapshot = SessionSnapshot {
             version: super::super::snapshot::SNAPSHOT_VERSION,
             workspaces: vec![WorkspaceSnapshot {
+                pinned: false,
                 id: Some("workspace".into()),
                 custom_name: None,
                 identity_cwd: cwd,

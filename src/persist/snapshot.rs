@@ -66,6 +66,9 @@ pub struct WorkspaceSnapshot {
     pub tabs: Vec<TabSnapshot>,
     #[serde(default)]
     pub active_tab: usize,
+    /// Defaulted so snapshots written before pinning existed still deserialize.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub pinned: bool,
 }
 
 #[derive(Deserialize)]
@@ -164,6 +167,8 @@ impl From<LegacyWorkspaceSnapshot> for WorkspaceSnapshot {
             next_public_tab_number: 0,
             tabs: vec![tab],
             active_tab: 0,
+            // Legacy snapshots predate pinning.
+            pinned: false,
         }
     }
 }
@@ -305,6 +310,7 @@ fn capture_workspace(
             .map(|tab| capture_tab(tab, terminals, terminal_runtimes))
             .collect(),
         active_tab: ws.active_tab,
+        pinned: ws.pinned,
     }
 }
 
@@ -559,6 +565,48 @@ mod tests {
     }
 
     #[test]
+    fn pinned_flag_survives_capture() {
+        let mut state = state_with_workspaces(&["pinned", "loose"]);
+        state.workspaces[0].pinned = true;
+
+        let snapshot = capture_from_state(&state);
+
+        assert!(snapshot.workspaces[0].pinned);
+        assert!(!snapshot.workspaces[1].pinned);
+    }
+
+    #[test]
+    fn snapshots_written_before_pinning_deserialize_as_unpinned() {
+        // Guards the `#[serde(default)]` on `WorkspaceSnapshot::pinned`: an
+        // existing session file has no `pinned` key at all, and dropping it on
+        // the floor would be a hard restore failure rather than a lost pin.
+        let mut state = state_with_workspaces(&["legacy"]);
+        state.workspaces[0].pinned = true;
+        let snapshot = capture_from_state(&state);
+        let mut json = serde_json::to_value(&snapshot).expect("snapshot serializes");
+        json["workspaces"][0]
+            .as_object_mut()
+            .expect("workspace snapshot is an object")
+            .remove("pinned");
+
+        let reparsed: SessionSnapshot =
+            serde_json::from_value(json).expect("snapshot without `pinned` still deserializes");
+
+        assert!(!reparsed.workspaces[0].pinned);
+    }
+
+    #[test]
+    fn unpinned_workspaces_do_not_write_a_pinned_key() {
+        // `skip_serializing_if` keeps existing session files byte-identical for
+        // everyone who never pins anything.
+        let state = state_with_workspaces(&["loose"]);
+        let snapshot = capture_from_state(&state);
+        let json = serde_json::to_value(&snapshot).expect("snapshot serializes");
+
+        assert!(json["workspaces"][0].get("pinned").is_none());
+    }
+
+    #[test]
     fn managed_agent_snapshot_omits_pending_and_persists_active_ownership() {
         let mut state = state_with_workspaces(&["managed-snapshot"]);
         let root = state.workspaces[0].tabs[0].root_pane;
@@ -664,6 +712,7 @@ mod tests {
 
         let snap = SessionSnapshot {
             workspaces: vec![WorkspaceSnapshot {
+                pinned: false,
                 id: Some("wproj".to_string()),
                 custom_name: Some("pi-mono".to_string()),
                 identity_cwd: PathBuf::from("/home/can/Projects/herdr"),
@@ -1226,6 +1275,7 @@ mod tests {
         let snap = SessionSnapshot {
             version: SNAPSHOT_VERSION,
             workspaces: vec![WorkspaceSnapshot {
+                pinned: false,
                 id: Some("test-ws".to_string()),
                 custom_name: Some("fallback test".to_string()),
                 identity_cwd: PathBuf::from("/tmp"),
