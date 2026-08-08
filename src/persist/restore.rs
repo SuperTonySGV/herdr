@@ -398,6 +398,60 @@ fn restore_workspace(
         tabs.push(tab);
     }
 
+    // A pinned space is meant to survive losing its contents, and that promise
+    // should hold across a restart too. If nothing could be rebuilt -- typically
+    // because the saved directory no longer exists -- fall back to a single
+    // plain shell in the nearest directory that does, rather than dropping the
+    // space and silently losing the pin.
+    if tabs.is_empty() && snap.pinned {
+        let fallback_cwd = nearest_existing_ancestor(&snap.identity_cwd);
+        let fallback_snap = TabSnapshot {
+            custom_name: None,
+            layout: LayoutSnapshot::Pane(1),
+            panes: HashMap::from([(
+                1,
+                super::snapshot::PaneSnapshot {
+                    cwd: fallback_cwd,
+                    label: None,
+                    agent_name: None,
+                    managed_agent_kind: None,
+                    agent_session: None,
+                    launch_argv: None,
+                },
+            )]),
+            zoomed: false,
+            focused: Some(1),
+            root_pane: Some(1),
+        };
+        let (restored_tab, fallback_failed_imports) = restore_tab(
+            &fallback_snap,
+            None,
+            1,
+            &workspace_id,
+            rows,
+            cols,
+            runtime_context,
+            resumed_agent_sessions,
+            imported_panes,
+            &public_pane_ids_by_old_raw,
+        );
+        failed_imports += fallback_failed_imports;
+        if let Some((tab, restored_terminals, restored_runtimes, _)) = restored_tab {
+            warn!(
+                workspace = %workspace_id,
+                "pinned workspace had no restorable tabs; seeded a replacement shell"
+            );
+            for pane_id in tab.layout.pane_ids() {
+                public_pane_numbers.insert(pane_id, 1);
+                next_public_pane_number = next_public_pane_number.max(2);
+            }
+            next_public_tab_number = next_public_tab_number.max(2);
+            terminals.extend(restored_terminals);
+            terminal_runtimes.extend(restored_runtimes);
+            tabs.push(tab);
+        }
+    }
+
     if tabs.is_empty() {
         return (None, failed_imports);
     }
@@ -432,6 +486,18 @@ fn restore_workspace(
         .map(|workspace| (workspace, terminals, terminal_runtimes)),
         failed_imports,
     )
+}
+
+/// First existing directory at or above `path`, falling back to the home
+/// directory and then the filesystem root. Used to place a pinned space's
+/// replacement shell somewhere a process can actually start.
+fn nearest_existing_ancestor(path: &std::path::Path) -> PathBuf {
+    for candidate in path.ancestors() {
+        if candidate.is_dir() {
+            return candidate.to_path_buf();
+        }
+    }
+    std::env::current_dir().unwrap_or_else(|_| PathBuf::from(std::path::MAIN_SEPARATOR_STR))
 }
 
 fn restored_worktree_space_membership(
@@ -1166,6 +1232,126 @@ mod tests {
         assert!(take_restore_plan_for_snapshot(&session, true, &mut resumed).is_none());
 
         assert!(restored_terminal_agent_session(Some(&session), true).is_none());
+    }
+
+    /// A workspace snapshot with nothing restorable in it, and an identity_cwd
+    /// pointing at a directory that no longer exists. This is the state that
+    /// used to make a workspace vanish: every tab failed to rebuild, so `tabs`
+    /// came out empty.
+    fn snapshot_with_no_restorable_tabs(pinned: bool) -> SessionSnapshot {
+        let missing = std::env::current_dir()
+            .unwrap()
+            .join("definitely-not-a-real-directory-for-restore-tests");
+        SessionSnapshot {
+            version: super::super::snapshot::SNAPSHOT_VERSION,
+            workspaces: vec![WorkspaceSnapshot {
+                pinned,
+                id: Some("workspace".into()),
+                custom_name: Some("gone".into()),
+                identity_cwd: missing,
+                worktree_space: None,
+                public_pane_numbers: HashMap::new(),
+                next_public_pane_number: 0,
+                public_tab_numbers: Vec::new(),
+                next_public_tab_number: 0,
+                tabs: Vec::new(),
+                active_tab: 0,
+            }],
+            active: Some(0),
+            selected: 0,
+            sidebar_width: None,
+            sidebar_section_split: None,
+            collapsed_space_keys: Default::default(),
+        }
+    }
+
+    fn restore_snapshot(snapshot: &SessionSnapshot) -> Vec<Workspace> {
+        let (events, _event_rx) = mpsc::channel(4);
+        let (workspaces, _terminals, _runtimes) = restore(
+            snapshot,
+            None,
+            24,
+            80,
+            0,
+            test_restore_shell(),
+            crate::config::ShellModeConfig::NonLogin,
+            false,
+            events,
+            Arc::new(Notify::new()),
+            Arc::new(RenderSignal::new()),
+        );
+        workspaces
+    }
+
+    #[tokio::test]
+    async fn pinned_workspace_with_nothing_restorable_is_seeded_instead_of_dropped() {
+        let workspaces = restore_snapshot(&snapshot_with_no_restorable_tabs(true));
+
+        assert_eq!(
+            workspaces.len(),
+            1,
+            "a pinned space must not disappear just because nothing could be rebuilt"
+        );
+        assert!(workspaces[0].pinned, "the pin itself must survive too");
+        assert_eq!(
+            workspaces[0].tabs.len(),
+            1,
+            "the replacement shell should leave exactly one tab"
+        );
+        assert_eq!(workspaces[0].custom_name.as_deref(), Some("gone"));
+        // The saved directory is gone, so the shell must have landed on an
+        // ancestor that exists rather than failing to start.
+        assert!(
+            workspaces[0].identity_cwd.parent().is_some(),
+            "replacement shell needs a usable directory"
+        );
+        workspaces[0].assert_invariants_for_test();
+    }
+
+    #[tokio::test]
+    async fn unpinned_workspace_with_nothing_restorable_is_still_dropped() {
+        let workspaces = restore_snapshot(&snapshot_with_no_restorable_tabs(false));
+
+        assert!(
+            workspaces.is_empty(),
+            "unpinned spaces keep the existing drop behavior"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_missing_directory_alone_does_not_drop_a_workspace() {
+        // Characterization: spawning a shell whose cwd no longer exists still
+        // succeeds here, so a moved or deleted repo does NOT by itself trigger
+        // the drop path. Recorded so the seeding fallback above is understood
+        // as a guard for the general "nothing rebuilt" case rather than a fix
+        // for missing directories specifically.
+        let missing = std::env::current_dir()
+            .unwrap()
+            .join("definitely-not-a-real-directory-for-restore-tests");
+        let mut snapshot = snapshot_with_no_restorable_tabs(false);
+        snapshot.workspaces[0].tabs = vec![TabSnapshot {
+            custom_name: None,
+            layout: LayoutSnapshot::Pane(0),
+            panes: HashMap::from([(
+                0,
+                super::super::snapshot::PaneSnapshot {
+                    cwd: missing,
+                    label: None,
+                    agent_name: None,
+                    managed_agent_kind: None,
+                    agent_session: None,
+                    launch_argv: None,
+                },
+            )]),
+            zoomed: false,
+            focused: Some(0),
+            root_pane: Some(0),
+        }];
+
+        let workspaces = restore_snapshot(&snapshot);
+
+        assert_eq!(workspaces.len(), 1);
+        assert_eq!(workspaces[0].tabs.len(), 1);
     }
 
     #[tokio::test]
