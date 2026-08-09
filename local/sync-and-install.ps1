@@ -15,7 +15,12 @@ Exit codes:
 [CmdletBinding()]
 param(
     # Rebuild and reinstall even when upstream had no new commits.
-    [switch]$Force
+    [switch]$Force,
+
+    # Build and install HEAD as it stands: no fetch, no rebase. For picking up a
+    # local commit without also taking whatever upstream has landed since --
+    # a rebase is a separate decision and does not belong in an install.
+    [switch]$SkipUpstream
 )
 
 $ErrorActionPreference = 'Stop'
@@ -42,9 +47,13 @@ if ($startingBranch -ne $branch) {
     if (-not $?) { Write-Warning "Could not check out $branch."; exit 1 }
 }
 
-Write-Step 'Fetching upstream...'
-git fetch upstream --tags --quiet
-if (-not $?) { Write-Warning 'git fetch failed.'; exit 1 }
+if ($SkipUpstream) {
+    Write-Step 'Skipping upstream fetch/rebase (-SkipUpstream); building HEAD as it stands.'
+} else {
+    Write-Step 'Fetching upstream...'
+    git fetch upstream --tags --quiet
+    if (-not $?) { Write-Warning 'git fetch failed.'; exit 1 }
+}
 
 $before = git rev-parse HEAD
 $upstreamHead = git rev-parse upstream/master
@@ -54,7 +63,7 @@ $mergeBase = git merge-base HEAD upstream/master
 # built from the current HEAD. Checking upstream alone is not enough: a local
 # commit that was never built would be skipped, which is exactly how the restore
 # fix once sat committed but uninstalled.
-if ($mergeBase -eq $upstreamHead -and -not $Force) {
+if (($mergeBase -eq $upstreamHead -or $SkipUpstream) -and -not $Force) {
     $headShort = (git rev-parse --short=8 HEAD).Trim()
     $installedSha = $null
     if (Test-Path $binExe) {
@@ -69,7 +78,7 @@ if ($mergeBase -eq $upstreamHead -and -not $Force) {
     Write-Step "Upstream is current, but the installed build ($installedSha) is not HEAD ($headShort). Rebuilding."
 }
 
-if ($mergeBase -ne $upstreamHead) {
+if ($mergeBase -ne $upstreamHead -and -not $SkipUpstream) {
     Write-Step "Rebasing $branch onto upstream/master ($($upstreamHead.Substring(0,8)))..."
     git rebase upstream/master
     if (-not $?) {
@@ -104,6 +113,71 @@ foreach ($filter in @('pin', 'context_menu')) {
         exit 1
     }
 }
+
+# Then the broad suite. Two Windows-specific problems make this more than a
+# plain `cargo test`, and both are upstream's, not the patch's:
+#
+#  1. A handful of tests that spawn a real PTY deadlock and never return, so an
+#     unfiltered run never finishes. They are skipped by name below.
+#     `desktop_new_workspace_creates_immediately_by_default` hangs even alone at
+#     --test-threads=1, so this is not thread contention that a serial run fixes.
+#  2. ~106 tests fail on a clean checkout. Gating on the exit code would block
+#     every install forever, so instead the failures are diffed against a
+#     recorded baseline and only *new* names are treated as a regression.
+#
+# This is what makes the update path a real gate. Before it existed the only
+# check was the two filters above, which is how a last-tab-close bug in the
+# pinned-spaces patch reached a running herdr (fixed in e65e3bac).
+$knownHangs = @(
+    'desktop_new_workspace_creates_immediately_by_default',
+    'new_workspace_key_opens_prefilled_prompt_and_preserves_captured_cwd',
+    'new_workspace_prompt_saves_custom_name_atomically',
+    'navigate_mode_matches_legacy_uppercase_shifted_letter',
+    'navigate_mode_runs_prefix_action_rhs_without_pressing_prefix_again'
+)
+$baselineFile = "$repo\.local\windows-test-baseline.txt"
+$broadLog = Join-Path $env:TEMP 'herdr-broad-tests.txt'
+$broadErr = Join-Path $env:TEMP 'herdr-broad-tests.err.txt'
+
+Write-Step "Running the broad suite ($($knownHangs.Count) known-hanging tests skipped; this takes ~15 min)..."
+$testArgs = @('test', '--bins', '--')
+foreach ($h in $knownHangs) { $testArgs += '--skip'; $testArgs += $h }
+$proc = Start-Process -FilePath 'cargo' -ArgumentList $testArgs -NoNewWindow -PassThru `
+    -RedirectStandardOutput $broadLog -RedirectStandardError $broadErr
+# Generous ceiling: the run takes ~15 min, so 40 means something genuinely hung
+# rather than a slow machine. A new hang must not wedge the install forever.
+if (-not $proc.WaitForExit(2400000)) {
+    try { $proc.Kill() } catch { }
+    Write-Warning 'The broad suite did not finish within 40 minutes -- a test is hanging.'
+    Write-Warning "Partial output: $broadLog"
+    Write-Warning 'Not installing. Find the hang, then add it to $knownHangs if it is pre-existing.'
+    exit 1
+}
+
+$failed = @(Select-String -Path $broadLog -Pattern '^test (\S+) \.\.\. FAILED' |
+    ForEach-Object { $_.Matches.Groups[1].Value } | Sort-Object -Unique)
+$baseline = @()
+if (Test-Path $baselineFile) {
+    $baseline = @(Get-Content $baselineFile | Where-Object { $_.Trim() -and $_ -notmatch '^\s*#' })
+} else {
+    Write-Warning "No baseline at $baselineFile; treating every failure as new."
+}
+
+$regressions = @($failed | Where-Object { $baseline -notcontains $_ })
+if ($regressions.Count -gt 0) {
+    Write-Warning "$($regressions.Count) test(s) fail that are NOT in the known-failure baseline. Not installing:"
+    $regressions | ForEach-Object { Write-Warning "  $_" }
+    Write-Warning "Full output: $broadLog"
+    exit 1
+}
+
+# Not a failure, just drift worth knowing about: the baseline is stale in the
+# harmless direction and can be trimmed.
+$nowPassing = @($baseline | Where-Object { $failed -notcontains $_ })
+if ($nowPassing.Count -gt 0) {
+    Write-Step "$($nowPassing.Count) baseline failure(s) now pass; consider trimming $baselineFile"
+}
+Write-Step "Broad suite clean against baseline ($($failed.Count) known failures, 0 new)."
 
 Write-Step 'Installing patched binary...'
 

@@ -13,7 +13,51 @@ Everything below is committed, pushed and installed unless stated otherwise.
 - Read `.local/PINNED-SPACES.md` first — how the feature works, why, the
   line-ending setting that must not be undone, and the update model.
 
-## The open bug — a pinned space still vanishes
+## The open bug — FIXED 2026-08-08
+
+Fixed on branch `fix/pinned-space-last-tab-close`, commit `e65e3bac`, off
+`feat/pinned-spaces`. **Not merged and not built/installed** — the running
+`0.8.0-pinned.e3d75270` still has the bug until someone builds and restarts.
+Merging is Anthony's call.
+
+The fix is the suggested one below: `close_active_tab_via_api_requires_confirmation`
+no longer short-circuits when the space is pinned. Sibling paths were audited —
+the tab context menu shares the same function, and the pane path already goes
+through the real `pane.close` API, so there was no second instance. Regression
+tests are at the input layer as suggested: 4 in `navigate.rs`, 2 in `modal.rs`,
+1 in `ui/dialogs.rs`. Verified non-vacuous by neutering the fix and confirming
+exactly the pinned tests fail.
+
+Also added in the same commit: an explicit TUI close of a pinned space always
+confirms, even with `ui.confirm_close` off, and the dialog title names it as
+pinned. (Anthony has never set `confirm_close`, so he was already on the default
+`true` — the visible change for him is the title.)
+
+### Newly discovered: the test suite hangs on Windows
+
+Separate from the bug, and pre-existing. `cargo test --bin herdr` never
+finishes here: a handful of PTY-spawning tests deadlock, including
+`desktop_new_workspace_creates_immediately_by_default`, which hangs even at
+`--test-threads=1` in isolation. Roughly 12 tests are affected and the exact set
+varies per run. Proven pre-existing by running the same target on stashed-clean
+`e3d75270`.
+
+There are also **105 pre-existing test failures** on Windows (66 in
+`integration`, 19 in `detect::manifest`, the rest scattered). Baselined against
+clean `e3d75270`: identical failure set, so the fix introduces none. Useful
+invocation for future sessions, which completes in ~15 min:
+
+```
+cargo test --bin herdr -- --skip desktop_new_workspace_creates_immediately_by_default \
+  --skip new_workspace_key_opens_prefilled_prompt_and_preserves_captured_cwd \
+  --skip new_workspace_prompt_saves_custom_name_atomically \
+  --skip navigate_mode_matches_legacy_uppercase_shifted_letter \
+  --skip navigate_mode_runs_prefix_action_rhs_without_pressing_prefix_again
+```
+
+Note `.local\env.ps1` must be sourced first or the build fails: zig is not on PATH.
+
+## The original report — a pinned space still vanishes
 
 **Symptom.** Anthony closed the last tab in the pinned `Anthony` space; the
 whole space disappeared. Same for `compass` (`wQ`) moments later. Both were

@@ -1,0 +1,121 @@
+# Known-failing tests on Windows, as of upstream master @ 10974c82 / feat/pinned-spaces @ e65e3bac.
+#
+# These fail on a clean checkout of the base commit too -- they are upstream's
+# Windows state, not caused by the pinned-spaces patch. sync-and-install.ps1
+# runs the broad suite and fails the install only on failures NOT listed here,
+# so a real regression is still caught.
+#
+# Recorded 2026-08-08 by diffing two full runs: one on e65e3bac, one on a
+# stashed-clean e3d75270. Identical sets apart from one flaky entry
+# (plugin_link_creates_stable_config_and_state_dirs), which is included so a
+# flake cannot block an install.
+#
+# Regenerate after an upstream rebase changes the picture:
+#   cargo test --bins -- --skip <the five hangs, see sync-and-install.ps1> \n#     | Select-String "^test (\S+) \.\.\. FAILED"
+#
+api::server::pane_graphics_stream::tests::partial_graphics_header_times_out_after_first_byte
+api::server::pane_graphics_stream::tests::timed_out_header_dispatches_owner_scoped_stream_close
+api::server::pane_graphics_stream::tests::trickled_graphics_body_obeys_absolute_deadline
+app::actions::tests::navigator_rows_match_live_root_runtime_cwd_workspace_label
+app::api::layouts::tests::layout_apply_replaces_tab_with_requested_tree
+app::api::plugins::tests::plugin_link_creates_stable_config_and_state_dirs
+app::api::tests::agent_explain_evaluates_with_server_manifest_cache
+app::input::terminal::tests::popup_forwards_escape_instead_of_closing
+app::tests::host_report_all_supplies_printable_releases_for_event_type_only_panes
+app::worktrees::tests::worktree_create_enter_submits_through_api_path
+detect::manifest::tests::codex_background_terminal_screen_does_not_override_osc_idle
+detect::manifest::tests::codex_osc_title_action_required_is_blocked
+detect::manifest::tests::codex_osc_title_braille_spinner_is_working
+detect::manifest::tests::codex_osc_title_plain_is_idle
+detect::manifest::tests::codex_osc_working_beats_weak_blocker_screen
+detect::manifest::tests::codex_osc_working_remains_preferred_over_screen_fallback
+detect::manifest::tests::codex_screen_blocker_outranks_working_fallback
+detect::manifest::tests::codex_screen_working_fallback_handles_static_osc_title
+detect::manifest::tests::codex_screen_working_fallback_ignores_interrupted_short_terminal
+detect::manifest::tests::codex_screen_working_fallback_ignores_stale_and_prompt_text
+detect::manifest::tests::codex_transcript_viewer_outranks_working_fallback
+detect::manifest::tests::codex_weak_blocker_outranks_working_fallback
+detect::manifest::tests::detection_uses_cached_manifest_until_explicit_reload
+detect::manifest::tests::fallback_explain_preserves_active_manifest_version
+detect::manifest::tests::invalid_local_override_falls_back_to_cached_remote_manifest
+detect::manifest::tests::local_override_shadows_cached_remote_manifest
+detect::manifest::tests::older_cached_remote_manifest_does_not_shadow_newer_bundled_manifest
+detect::manifest::tests::remote_manifest_loads_between_local_override_and_bundled
+detect::manifest::tests::rule_semantics_apply_gates_priority_and_line_regex
+detect::manifest_update::tests::auto_update_reloads_manifest_cache_after_remote_commit
+detect::manifest_update::tests::process_agent_manifest_commits_newer_manifest_atomically
+detect::manifest_update::tests::process_agent_manifest_rejects_downgrade_and_keeps_cached_manifest
+detect::manifest_update::tests::process_agent_manifest_rejects_equal_version_content_change
+detect::manifest_update::tests::process_agent_manifest_skips_same_version_same_content
+integration::tests::bundled_integration_assets_report_session_refs
+integration::tests::install_droid_writes_hook_to_settings_and_cleans_legacy_hooks_json
+integration::tests::install_grok_errors_when_config_dir_missing
+integration::tests::install_grok_is_idempotent
+integration::tests::install_grok_uses_grok_config_dir_env
+integration::tests::install_grok_writes_hook_and_config
+integration::tests::install_hermes_converts_flow_plugin_list_to_block_list
+integration::tests::install_hermes_errors_when_config_dir_missing
+integration::tests::install_hermes_is_idempotent_for_enabled_entry
+integration::tests::install_hermes_is_idempotent_for_quoted_flat_plugin_entry
+integration::tests::install_hermes_preserves_flat_plugin_list
+integration::tests::install_hermes_writes_plugin_and_enables_it
+integration::tests::install_kilo_errors_when_config_dir_missing
+integration::tests::install_kilo_writes_plugin_to_plugin_dir
+integration::tests::install_kimi_errors_when_config_dir_missing
+integration::tests::install_kimi_is_idempotent_for_config_block
+integration::tests::install_kimi_uses_kimi_code_home_env
+integration::tests::install_kimi_writes_hook_and_updates_config
+integration::tests::install_mastracode_errors_when_event_value_not_array
+integration::tests::install_mastracode_is_idempotent_for_hook_entries
+integration::tests::install_mastracode_removes_v1_lifecycle_hooks
+integration::tests::install_mastracode_writes_hook_and_updates_hooks_json
+integration::tests::install_omp_creates_extensions_dir_when_agent_dir_exists
+integration::tests::install_omp_errors_when_extension_dir_missing
+integration::tests::install_omp_preserves_non_herdr_file_with_pi_install_name
+integration::tests::install_omp_refuses_shared_pi_extension_directory
+integration::tests::install_omp_removes_legacy_pi_integration_from_omp_extensions_dir
+integration::tests::install_omp_uses_pi_config_dir_env
+integration::tests::install_omp_writes_embedded_asset_to_omp_extensions_dir
+integration::tests::install_opencode_errors_when_config_dir_missing
+integration::tests::install_opencode_writes_plugin_to_plugins_dir
+integration::tests::install_pi_creates_extensions_dir_when_agent_dir_exists
+integration::tests::install_pi_errors_when_extension_dir_missing
+integration::tests::install_pi_expands_tilde_in_pi_coding_agent_dir_env
+integration::tests::install_pi_uses_pi_coding_agent_dir_env
+integration::tests::install_pi_writes_embedded_asset_to_pi_extensions_dir
+integration::tests::install_qodercli_errors_when_config_dir_missing
+integration::tests::install_qodercli_is_idempotent_for_hook_entries
+integration::tests::install_qodercli_writes_hook_and_updates_settings
+integration::tests::integration_recommendations_mark_standalone_codex_available
+integration::tests::outdated_integrations_accept_current_version_marker
+integration::tests::outdated_integrations_detect_previous_omp_version
+integration::tests::outdated_integrations_detect_previous_pi_version
+integration::tests::outdated_integrations_treat_missing_version_marker_as_legacy
+integration::tests::qodercli_availability_checks_windows_aliases
+integration::tests::uninstall_antigravity_cli_removes_hooks_json_entries_and_hook_file
+integration::tests::uninstall_claude_removes_herdr_hooks_and_preserves_others
+integration::tests::uninstall_codex_removes_herdr_hooks_and_leaves_config_alone
+integration::tests::uninstall_copilot_removes_herdr_hooks_and_preserves_others
+integration::tests::uninstall_cursor_removes_herdr_hooks_and_preserves_others
+integration::tests::uninstall_devin_removes_herdr_hooks_and_preserves_others
+integration::tests::uninstall_droid_removes_herdr_hooks_and_preserves_others
+integration::tests::uninstall_grok_removes_files
+integration::tests::uninstall_hermes_preserves_flat_plugin_list
+integration::tests::uninstall_hermes_removes_commented_flat_plugin_entry
+integration::tests::uninstall_hermes_removes_flow_plugin_list_entry
+integration::tests::uninstall_hermes_removes_plugin_and_enabled_entry
+integration::tests::uninstall_kilo_removes_plugin_when_present
+integration::tests::uninstall_kimi_removes_hook_and_config_block_preserves_other_hooks
+integration::tests::uninstall_mastracode_errors_when_event_value_not_array
+integration::tests::uninstall_mastracode_removes_herdr_hooks_and_preserves_others
+integration::tests::uninstall_omp_removes_embedded_extension_when_present
+integration::tests::uninstall_opencode_removes_plugin_when_present
+integration::tests::uninstall_pi_removes_embedded_extension_when_present
+integration::tests::uninstall_qodercli_removes_herdr_hooks_and_preserves_others
+integration::tests::windows_availability_includes_native_integrations
+platform::windows::tests::windows_shells_round_trip_agent_arguments_through_a_real_command
+server::headless::tests::hidden_pty_output_appears_after_switching_to_its_tab
+server::headless::tests::invalid_server_keybindings_apply_valid_subset_after_settings_save_without_caching_local_keybindings
+server::headless::tests::local_keybinding_client_keeps_local_keybindings_after_settings_save
+terminal_modes::tests::host_keyboard_report_all_replaces_the_current_herdr_stack_entry
+workspace::tests::generated_workspace_ids_are_short_base32_handles

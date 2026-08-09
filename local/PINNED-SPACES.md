@@ -17,9 +17,14 @@ This covers all three ways a space empties out:
 - closing the last tab
 - the last pane's process exiting on its own (agent or shell quits)
 
-Explicitly closing a space (`prefix+shift+d`, `herdr workspace close`) still
-closes it, pinned or not. Pinning protects against incidental loss, not against a
-deliberate close.
+Explicitly closing a space (`prefix+shift+d`, the right-click **Close** entry,
+`herdr workspace close`) still closes it, pinned or not. Pinning protects against
+incidental loss, not against a deliberate close.
+
+From the TUI, an explicit close of a *pinned* space always shows the confirmation
+dialog first — titled "Close pinned workspace?" — even when `ui.confirm_close` is
+off. The CLI/API `workspace.close` is unchanged and closes without asking; there
+is nowhere to prompt.
 
 ## Using it
 
@@ -65,6 +70,13 @@ closing the space, because the alternative is a panic.
 - **No keybind yet.** Pinning is reachable from the right-click menu and the
   CLI/API, but not bound to a key. Adding one means touching
   `config/keybinds.rs` plus the navigate-mode action table.
+- **The TUI reclassified a last-tab close as a space close.** Fixed on
+  `fix/pinned-space-last-tab-close`: `close_active_tab_via_api_requires_confirmation`
+  short-circuited to `workspace.close` whenever the space had one tab, so the
+  guard in `handle_tab_close` was never reached and pinned spaces died. It now
+  falls through to `tab.close` when the space is pinned. The regression tests for
+  it live at the *input* layer (`navigate.rs`, `modal.rs`), which is the gap that
+  let this ship.
 - **The integration test suite (`tests/`) is Unix-only** and does not compile on
   Windows at all — this is upstream's state, not something the patch caused. The
   re-seed behavior itself needs a PTY, so it is verified by running the built
@@ -124,10 +136,37 @@ herdr-update
 ```
 
 which runs `.local\run-sync-logged.ps1` -> `.local\sync-and-install.ps1`:
-fetch, rebase, build, run the `pin` and `context_menu` tests, install. Logs to
-`.local\sync.log` as UTF-8, rotating at 1MB. Exit code 2 means the rebase
-conflicted and needs a human; the script aborts the rebase and leaves the tree
-clean.
+fetch, rebase, build, test, install. Logs to `.local\sync.log` as UTF-8,
+rotating at 1MB. Exit code 2 means the rebase conflicted and needs a human; the
+script aborts the rebase and leaves the tree clean.
+
+`-SkipUpstream` builds and installs HEAD as it stands, with no fetch and no
+rebase. Use it to pick up a local commit without also taking whatever upstream
+has landed since; rebasing is a separate decision and shouldn't ride along with
+an install.
+
+### The test gate
+
+The script runs the `pin` and `context_menu` filters, then the **broad suite**.
+The broad run needs two Windows-specific accommodations, both upstream's state
+rather than anything this patch caused:
+
+- **Five tests are skipped by name** because they deadlock and never return.
+  `desktop_new_workspace_creates_immediately_by_default` hangs even alone under
+  `--test-threads=1`, so this is not thread contention. An unfiltered
+  `cargo test` on this machine never finishes.
+- **~106 tests fail on a clean checkout**, so the exit code is useless as a
+  gate. Instead the failures are diffed against `.local\windows-test-baseline.txt`
+  and only names *not* in that list fail the install. A run that hangs past 40
+  minutes also fails rather than wedging forever.
+
+This is what makes the update path an actual gate. Until it existed the only
+check was those two filters, which is how the last-tab-close bug (`e65e3bac`)
+reached a running herdr: every test covering it lived on API handlers that the
+broken TUI path never called.
+
+Regenerate the baseline after an upstream rebase shifts it, and keep the diff
+honest — a failure removed from that file is a failure nobody will see again.
 
 Safe to run speculatively -- it exits in about a second when upstream is current
 *and* the installed build matches HEAD. Both conditions are required, which is
