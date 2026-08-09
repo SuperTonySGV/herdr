@@ -96,17 +96,47 @@ out from HEAD is the fix.
 
 ## Keeping current
 
+Nothing rebuilds unattended. The model is the same as any other app: something
+cheap checks for updates and tells you, and you decide when to apply one.
+
+**Checking** is a scheduled task, `herdr-check-for-updates`, running five minutes
+after logon and daily at noon. It runs `.local\check-for-updates.ps1`: a `git
+fetch` and a couple of SHA comparisons, about a second, no build. When there is
+something to apply it posts a herdr notification. Each distinct situation is
+announced once, deduplicated in `.local\last-announced-state.txt`.
+
+It compares three things, because all three can drift apart:
+
+| Comparison | Meaning |
+| --- | --- |
+| `upstream/master` vs `HEAD` | upstream has moved |
+| `HEAD` vs installed binary | local commits were never built |
+| installed binary vs running server | herdr reports this itself as `restart_needed` |
+
+The middle one exists because a commit that is never built is otherwise
+invisible. It happened once, and only surfaced because a session close-out went
+looking.
+
+**Applying** is a command, on PATH as `C:\Users\Anthony\tools\herdr-update.cmd`:
+
 ```
-pwsh -File .local\sync-and-install.ps1
+herdr-update
 ```
 
-Fetches upstream, rebases the patch, rebuilds, runs the `pin` and `context_menu`
-tests, and installs over the `herdr` on PATH. Exit code 2 means the rebase
+which runs `.local\run-sync-logged.ps1` -> `.local\sync-and-install.ps1`:
+fetch, rebase, build, run the `pin` and `context_menu` tests, install. Logs to
+`.local\sync.log` as UTF-8, rotating at 1MB. Exit code 2 means the rebase
 conflicted and needs a human; the script aborts the rebase and leaves the tree
 clean.
 
-A scheduled task, `herdr-pinned-spaces-sync`, runs this every Wednesday at noon
-and logs to `.local\sync.log`.
+Safe to run speculatively -- it exits in about a second when upstream is current
+*and* the installed build matches HEAD. Both conditions are required, which is
+why there is no `-Force`: checking upstream alone would skip an unbuilt local
+commit.
+
+Builds are stamped `0.8.0-pinned.<sha>` via `HERDR_BUILD_CHANNEL` and
+`HERDR_BUILD_ID`, which is what lets the installed binary say which commit it
+came from and makes herdr's own `restart_needed` meaningful.
 
 ### Installing over a running herdr
 
