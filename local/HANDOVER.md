@@ -1,162 +1,142 @@
-# Handover — pinned spaces, open bug
+# Handover — pinned spaces
 
-Written 2026-08-09. Previous session ran long; picking up in a fresh one.
+Written 2026-08-08. The bug the previous handover was written around is fixed.
 
 ## State
 
-Everything below is committed, pushed and installed unless stated otherwise.
+Everything below is committed and pushed.
 
-- Fork: `SuperTonySGV/herdr`, branch `feat/pinned-spaces`, HEAD `e3d75270`.
-- Tooling backup: branch `local-tooling` (orphan), HEAD `eea666fb`.
-- Installed and running: `0.8.0-pinned.e3d75270`. `restart_needed: no`.
-- Anthony has pinned ~10 spaces and is using the feature for real.
-- Read `.local/PINNED-SPACES.md` first — how the feature works, why, the
-  line-ending setting that must not be undone, and the update model.
+- Fork: `SuperTonySGV/herdr`, branch `feat/pinned-spaces`, HEAD `e65e3bac`.
+- Tooling backup: branch `local-tooling` (orphan), HEAD `e25c51c9`.
+- Installed on PATH: `0.8.0-pinned.e65e3bac`.
+- **The running server may still be `e3d75270`.** Windows has no live handoff, so
+  the fix only runs after `herdr server stop` + relaunch. Check `restart_needed`
+  before assuming the bug is gone from the live app.
+- Read `.local/PINNED-SPACES.md` first — how the feature works, the line-ending
+  setting that must not be undone, the update model, and the test-gate situation.
 
-## The open bug — FIXED 2026-08-08
+## What was fixed (`e65e3bac`)
 
-Fixed on branch `fix/pinned-space-last-tab-close`, commit `e65e3bac`, off
-`feat/pinned-spaces`. **Not merged and not built/installed** — the running
-`0.8.0-pinned.e3d75270` still has the bug until someone builds and restarts.
-Merging is Anthony's call.
+**The last-tab bug.** `close_active_tab_via_api_requires_confirmation`
+(`src/app/input/navigate.rs`) short-circuited to `workspace.close` whenever the
+active space had one tab left. That is an *explicit* close, which deliberately
+closes a pinned space, and it never reached the pinned guard in
+`App::handle_tab_close`. A pinned space now falls through to `tab.close`, which
+re-seeds it. Unpinned spaces keep the short-circuit.
 
-The fix is the suggested one below: `close_active_tab_via_api_requires_confirmation`
-no longer short-circuits when the space is pinned. Sibling paths were audited —
-the tab context menu shares the same function, and the pane path already goes
-through the real `pane.close` API, so there was no second instance. Regression
-tests are at the input layer as suggested: 4 in `navigate.rs`, 2 in `modal.rs`,
-1 in `ui/dialogs.rs`. Verified non-vacuous by neutering the fix and confirming
-exactly the pinned tests fail.
+Sibling paths were audited and are fine: the tab context menu shares the same
+function, and the pane path already goes through the real `pane.close` API.
 
-Also added in the same commit: an explicit TUI close of a pinned space always
-confirms, even with `ui.confirm_close` off, and the dialog title names it as
-pinned. (Anthony has never set `confirm_close`, so he was already on the default
-`true` — the visible change for him is the title.)
+**A confirmation on explicit close.** An explicit TUI close of a pinned space
+now always prompts, even with `ui.confirm_close` off, and the dialog title reads
+"Close pinned workspace?". Anthony has never set `confirm_close`, so he was
+already on the default `true` — the visible change for him is the title. CLI/API
+`workspace.close` is unchanged; there is nowhere to prompt.
 
-### Newly discovered: the test suite hangs on Windows
+**Tests.** 7 at the input layer — 4 in `navigate.rs`, 2 in `modal.rs`, 1 in
+`ui/dialogs.rs` — which is the gap that let the bug ship: all prior coverage was
+on API handlers the broken TUI path never called. Verified non-vacuous by
+neutering the fix and confirming exactly the pinned tests fail.
 
-Separate from the bug, and pre-existing. `cargo test --bin herdr` never
-finishes here: a handful of PTY-spawning tests deadlock, including
-`desktop_new_workspace_creates_immediately_by_default`, which hangs even at
-`--test-threads=1` in isolation. Roughly 12 tests are affected and the exact set
-varies per run. Proven pre-existing by running the same target on stashed-clean
-`e3d75270`.
+## Open items
 
-There are also **105 pre-existing test failures** on Windows (66 in
-`integration`, 19 in `detect::manifest`, the rest scattered). Baselined against
-clean `e3d75270`: identical failure set, so the fix introduces none. Useful
-invocation for future sessions, which completes in ~15 min:
+### 1. Two of those tests are flaky under load — ours
 
-```
-cargo test --bin herdr -- --skip desktop_new_workspace_creates_immediately_by_default \
-  --skip new_workspace_key_opens_prefilled_prompt_and_preserves_captured_cwd \
-  --skip new_workspace_prompt_saves_custom_name_atomically \
-  --skip navigate_mode_matches_legacy_uppercase_shifted_letter \
-  --skip navigate_mode_runs_prefix_action_rhs_without_pressing_prefix_again
-```
+`tui_close_last_tab_of_pinned_space_reseeds_instead_of_closing_it` and
+`api_context_menu_close_last_tab_of_pinned_space_keeps_the_space` both spawn a
+real PTY via `reseed_pinned_workspace`, and both stall in full-suite runs. They
+pass reliably under the `pin` filter in well under a second, which is how the
+install gate still covers them.
 
-Note `.local\env.ps1` must be sourced first or the build fails: zig is not on PATH.
+Untested hypothesis, and the first thing to try: `#[tokio::test]` defaults to a
+current-thread runtime, and the PTY may need background progress a loaded
+machine starves. `#[tokio::test(flavor = "multi_thread")]` is a one-line change.
 
-## The original report — a pinned space still vanishes
+### 2. There is no broad test gate on this machine
 
-**Symptom.** Anthony closed the last tab in the pinned `Anthony` space; the
-whole space disappeared. Same for `compass` (`wQ`) moments later. Both were
-pinned.
+This is the condition that let the original bug ship, and it is **unsolved**.
+A full-suite gate was written 2026-08-08 and then removed because it cannot
+finish here:
 
-**Confirmed, not suspected.** Root cause is
-`src/app/input/navigate.rs::close_active_tab_via_api_requires_confirmation`
-(~line 464):
+- Five tests deadlock deterministically.
+  `desktop_new_workspace_creates_immediately_by_default` hangs alone at
+  `--test-threads=1`, so it is not thread contention.
+- Beyond those, a *shifting* handful of PTY-spawning tests stall every run — a
+  different set each time — so skipping by name never converges. Three
+  successive 40-minute runs each stalled on ~3 fresh names.
+- Lowering parallelism makes it worse: `--test-threads=4` stalled at 796/2940
+  where the default reached 2922.
 
-```rust
-if ws.tabs.len() <= 1 {
-    if self.state.confirm_implicit_worktree_group_close(ws_idx) { return true; }
-    self.close_workspace_idx_via_api(ws_idx);   // <-- short-circuit
-    return false;
-}
-let tab_idx = ...;
-self.runtime_tab_close("tui.tab.close", tab_id);
-```
+Do not restart this by adding names to a skip list; that path was already walked.
+If you attack it, start from the mechanism.
 
-When the TUI closes the **last** tab it never issues `tab.close` at all — it
-converts the action into `workspace.close`. The pinned guard added in this work
-lives in `App::handle_tab_close` (`src/app/api/tabs.rs`), which that path never
-reaches. `workspace.close` is an *explicit* close, which deliberately closes a
-pinned space, so the space is destroyed.
+**Diagnostic worth knowing:** libtest prints
+`test <name> has been running for over 60 seconds`. Grep for that instead of
+diffing `--list` against completed output — it identifies stuck tests directly
+and would have saved most of a session.
 
-**Log evidence** (`%APPDATA%\herdr\herdr-server.log`, 2026-08-09T01:16:39):
-`workspace.focus wQ` → `tab.focus wQ:t2` → `tab.focus wQ:t2` →
-`workspace.close wQ`. No `tab.close`. Compare 2026-08-08T20:32:20, a CLI
-`tab.close` on an *unpinned* space, which does show the API request.
+A full run *can* be completed by hand. One on `e65e3bac` reached 2928/2940 with
+105 failures, all matching `.local/windows-test-baseline.txt`, zero new. That
+baseline (106 names) was built by diffing two runs, one on `e65e3bac` and one on
+stashed-clean `e3d75270`.
 
-**Why the tests did not catch it.** Coverage is on `handle_tab_close`,
-`close_pane`, and the `PaneDied` path — all reached via the API. No test drives
-the TUI keybinding/menu route, and on Windows the `tests/` integration suite
-does not compile at all, so nothing exercises the real input path.
+### 3. The install gate is narrow, and was silently broken
 
-## Suggested fix
+`sync-and-install.ps1` gates on the `pin` and `context_menu` filters only. It
+protects the patch, not the binary — read it that way.
 
-In `close_active_tab_via_api_requires_confirmation`, do not short-circuit when
-the workspace is pinned — fall through to `runtime_tab_close` and let
-`handle_tab_close` do the re-seed it already knows how to do:
+It also used to refuse *every* install on *any* tree: `cargo test pin` is a
+substring filter and matches `codex_osc_title_braille_sPINner_is_working`, one of
+the ~106 pre-existing failures, and the old check tested the exit code. Both
+filters now go through `Invoke-GatedTests`, which diffs against the baseline and
+fails only on new names. Found by running the installer rather than reasoning
+about it.
 
-```rust
-let pinned = self.state.workspaces.get(ws_idx).is_some_and(|ws| ws.pinned);
-if !pinned && ws.tabs.len() <= 1 { ...existing short-circuit... }
-```
+`-SkipUpstream` was added: build and install HEAD with no fetch and no rebase.
 
-Keep the worktree-group confirmation check ahead of it either way.
+### 4. Upstream has moved
 
-**Check the sibling paths before declaring it fixed** — the same short-circuit
-shape may exist for:
+`upstream/master` is at `1777e9bb`; `feat/pinned-spaces` is not based on it, and
+local `master` is stale. Plain `herdr-update` will rebase onto it and rebuild —
+that is a real decision, not a no-op. Use `-SkipUpstream` to install a local
+commit without taking upstream's changes.
 
-- closing the last **pane** from the TUI (`navigate.rs`, look for
-  `close_pane_would_close_workspace` and any direct `close_workspace_idx_via_api`)
-- the tab context menu (`modal.rs` ~1298 calls the same function, so one fix
-  covers it — verify)
-- the mouse path in `mouse.rs` (tab bar close button / middle-click)
-
-Grep for `close_workspace_idx_via_api` and audit every caller: any call reached
-from *closing a tab or pane* rather than from an explicit "close space" action
-is the same bug.
-
-**Add a regression test at the input layer**, not the API layer — that is the
-gap that let this through. `AppState::test_new()` plus the navigate action
-should be enough without a PTY; if a real tab is needed, note that
-`reseed_pinned_workspace` needs a runtime and cannot run under `test_new`.
-
-## What is already verified working
-
-Do not re-litigate these; they were exercised against a live server:
-
-- Pinned space survives closing the last tab **via the API** (`tab.close`)
-- Pinned space survives closing the last **pane** (`pane.close`)
-- Pinned space survives its shell being killed (`PaneDied`)
-- Unpinned space still closes normally (control)
-- `pinned` persists across a full server restart — 11 spaces came back pinned
-- Right-click menu shows Pin/Unpin with the label reflecting state
-
-## Deliberate design decisions (not bugs)
-
-- **Explicit close closes a pinned space.** Pinning guards against *incidental*
-  loss. Anthony was asked and is fine with this. The bug above is that a
-  last-tab close is being silently reclassified as an explicit close.
-- Windows has no live handoff, so a new build only runs after
-  `herdr server stop` + relaunch. No reboot needed.
-- Nothing rebuilds unattended: `herdr-check-for-updates` notifies,
-  `herdr-update` applies.
-
-## Loose ends unrelated to the bug
+### 5. Older loose ends, unchanged
 
 - Upstream Discussion drafted, **unposted**: `.local/prd/`. Anthony's call.
-- ~41MB of `herdr.exe.old*` in `AppData\Local\Programs\Herdr\bin`; swept by the
-  next real `herdr-update` install.
-- `master` in the fork is stale. Harmless — nothing uses it.
+- `persist::restore` still drops a pinned space whose panes all fail to restore,
+  before the pinned flag is consulted — see Known limitations in
+  `PINNED-SPACES.md`.
+- No keybind for pin/unpin; right-click menu and CLI only.
+
+## Suggested order next session
+
+1. Restart herdr if it has not been restarted — the fix is installed but may not
+   be running, and that is the whole point of the work.
+2. The `multi_thread` experiment on our two flaky tests (item 1). Small, ours,
+   and it removes the one thing this session made worse.
+3. Decide on the upstream rebase (item 4) — it only gets harder as upstream moves.
+4. Anything on the broad test gate (item 2) is a project, not a task. Do not
+   start it inside a session that has other goals.
 
 ## Working agreements that bit during this work
 
 - `.local/` is gitignored; anything put there is invisible to git and must be
-  copied to `local-tooling` to survive.
+  copied to `local-tooling` to survive. Use a scratch `git worktree`, and verify
+  copies with `git hash-object` — the main tree never needs to be touched.
 - Do not use `Get-Content -Raw` to compare files — PowerShell 5.1 reads ANSI and
   produces false diffs on UTF-8. Use `git hash-object`.
 - `Set-Content -Encoding utf8` corrupts existing UTF-8 and adds a BOM. Use a
   `UTF8Encoding($false)` StreamWriter.
+- `.local\env.ps1` must be sourced before any cargo command, or the build fails:
+  zig is not on PATH.
+- `git commit -m` with a PowerShell here-string breaks when the message contains
+  double quotes — git re-parses the command line. Write the message to a file and
+  use `git commit -F`.
+
+## A note on scope, for whoever picks this up
+
+The fix took about an hour. The rest of the session went into a full-suite test
+gate that was never asked for, hit an upstream problem, and was removed again.
+The two filters were the ask. If the broad-gate question comes back, it deserves
+its own session and its own decision to spend the time.
