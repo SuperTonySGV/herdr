@@ -224,7 +224,7 @@ impl App {
             NavigateAction::CloseWorkspace => {
                 if let Some(ws_idx) = workspace_action_target(&self.state, context) {
                     self.state.selected = ws_idx;
-                    if self.state.confirm_close {
+                    if self.state.workspace_close_requires_confirmation(ws_idx) {
                         super::modal::open_confirm_close(&mut self.state);
                     } else {
                         self.close_workspace_idx_via_api(ws_idx);
@@ -465,11 +465,22 @@ impl App {
         let Some(ws_idx) = self.state.active else {
             return false;
         };
-        if self
+        // Closing the last tab of an *unpinned* space is the same thing as
+        // closing the space, so the TUI sends `workspace.close` directly. A
+        // pinned space must not take that shortcut: `workspace.close` is an
+        // explicit close and would destroy it. Fall through to `tab.close`,
+        // which re-seeds the space with a fresh tab instead.
+        let pinned = self
             .state
             .workspaces
             .get(ws_idx)
-            .is_some_and(|ws| ws.tabs.len() <= 1)
+            .is_some_and(|ws| ws.pinned);
+        if !pinned
+            && self
+                .state
+                .workspaces
+                .get(ws_idx)
+                .is_some_and(|ws| ws.tabs.len() <= 1)
         {
             if self.state.confirm_implicit_worktree_group_close(ws_idx) {
                 return true;
@@ -1620,7 +1631,7 @@ pub(super) fn execute_navigate_action_in_context(
         NavigateAction::CloseWorkspace => {
             if let Some(ws_idx) = workspace_action_target(state, context) {
                 state.selected = ws_idx;
-                if state.confirm_close {
+                if state.workspace_close_requires_confirmation(ws_idx) {
                     super::modal::open_confirm_close(state);
                 } else {
                     state.close_selected_workspace();
@@ -1909,6 +1920,76 @@ mod tests {
         terminal::TerminalState,
         workspace::Workspace,
     };
+
+    /// The TUI turns "close the last tab" into `workspace.close`, which is an
+    /// explicit close and destroys a pinned space. These four cover the input
+    /// layer specifically: the API-layer guard in `handle_tab_close` is never
+    /// reached when the short-circuit fires, which is how this shipped broken.
+    #[tokio::test]
+    async fn tui_close_last_tab_of_pinned_space_reseeds_instead_of_closing_it() {
+        let mut app = app_with_test_workspaces(&["pinned"]);
+        app.state.workspaces[0].pinned = true;
+        app.state.mode = Mode::Navigate;
+
+        app.execute_tui_navigate_action(NavigateAction::CloseTab, ActionContext::Navigate);
+
+        assert_eq!(
+            app.state.workspaces.len(),
+            1,
+            "a pinned space must survive losing its last tab from the TUI"
+        );
+        assert!(app.state.workspaces[0].pinned, "the pin must survive too");
+        assert_eq!(
+            app.state.workspaces[0].tabs.len(),
+            1,
+            "the replacement tab should leave exactly one tab"
+        );
+    }
+
+    #[tokio::test]
+    async fn tui_close_last_tab_of_unpinned_space_still_closes_it() {
+        let mut app = app_with_test_workspaces(&["plain"]);
+        app.state.mode = Mode::Navigate;
+
+        app.execute_tui_navigate_action(NavigateAction::CloseTab, ActionContext::Navigate);
+
+        assert!(
+            app.state.workspaces.is_empty(),
+            "unpinned spaces keep the existing close-with-last-tab behavior"
+        );
+    }
+
+    #[test]
+    fn closing_a_pinned_space_asks_first_even_with_confirm_close_off() {
+        let mut app = app_with_test_workspaces(&["pinned", "other"]);
+        app.state.confirm_close = false;
+        app.state.workspaces[0].pinned = true;
+        app.state.selected = 0;
+        app.state.mode = Mode::Navigate;
+
+        app.execute_tui_navigate_action(NavigateAction::CloseWorkspace, ActionContext::Navigate);
+
+        assert_eq!(app.state.mode, Mode::ConfirmClose);
+        assert_eq!(
+            app.state.workspaces.len(),
+            2,
+            "nothing should close until the prompt is answered"
+        );
+    }
+
+    #[test]
+    fn closing_an_unpinned_space_with_confirm_close_off_still_closes_immediately() {
+        let mut app = app_with_test_workspaces(&["plain", "other"]);
+        app.state.confirm_close = false;
+        app.state.selected = 0;
+        app.state.mode = Mode::Navigate;
+
+        app.execute_tui_navigate_action(NavigateAction::CloseWorkspace, ActionContext::Navigate);
+
+        assert_ne!(app.state.mode, Mode::ConfirmClose);
+        assert_eq!(app.state.workspaces.len(), 1);
+        assert_eq!(app.state.workspaces[0].display_name(), "other");
+    }
 
     fn mark_worktree_space_member(state: &mut AppState, ws_idx: usize, key: &str) {
         state.workspaces[ws_idx].worktree_space = Some(crate::workspace::WorktreeSpaceMembership {

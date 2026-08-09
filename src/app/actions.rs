@@ -1996,6 +1996,15 @@ impl AppState {
             })
     }
 
+    /// Whether an *explicit* close of this workspace should ask first.
+    ///
+    /// A pinned space always asks, even with `confirm_close` off: pinning says
+    /// the space is meant to stick around, so the one path that still destroys
+    /// it should not do so on a single keystroke.
+    pub(crate) fn workspace_close_requires_confirmation(&self, ws_idx: usize) -> bool {
+        self.confirm_close || self.workspaces.get(ws_idx).is_some_and(|ws| ws.pinned)
+    }
+
     pub(crate) fn confirm_implicit_worktree_group_close(&mut self, ws_idx: usize) -> bool {
         if self.confirm_close && self.workspace_close_would_close_worktree_group(ws_idx) {
             self.selected = ws_idx;

@@ -825,7 +825,7 @@ pub(super) fn apply_context_menu_action(
             Some("Close" | "Close group"),
         ) => {
             state.selected = ws_idx;
-            if state.confirm_close {
+            if state.workspace_close_requires_confirmation(ws_idx) {
                 open_confirm_close(state);
             } else {
                 state.close_selected_workspace();
@@ -1278,7 +1278,7 @@ impl App {
                 Some("Close" | "Close group"),
             ) => {
                 self.state.selected = ws_idx;
-                if self.state.confirm_close {
+                if self.state.workspace_close_requires_confirmation(ws_idx) {
                     open_confirm_close(&mut self.state);
                 } else {
                     self.close_workspace_idx_via_api(ws_idx);
@@ -2352,6 +2352,63 @@ mod tests {
         app.apply_context_menu_action_via_api(menu, idx);
 
         assert_eq!(app.state.selected, 0);
+        assert_eq!(app.state.mode, Mode::ConfirmClose);
+        assert_eq!(app.state.workspaces.len(), 2);
+    }
+
+    /// The tab context menu shares `close_active_tab_via_api_requires_confirmation`
+    /// with the keybinding, so it inherits the pinned fall-through. Pinned here
+    /// so a future split of those two paths cannot quietly regress this one.
+    #[tokio::test]
+    async fn api_context_menu_close_last_tab_of_pinned_space_keeps_the_space() {
+        let mut app = app_with_test_workspaces(&["pinned"]);
+        app.state.workspaces[0].pinned = true;
+        app.state.mode = Mode::ContextMenu;
+        let menu = ContextMenuState {
+            kind: ContextMenuKind::Tab {
+                ws_idx: 0,
+                tab_idx: 0,
+            },
+            x: 0,
+            y: 0,
+            list: MenuListState::new(0),
+        };
+        let idx = menu
+            .items()
+            .iter()
+            .position(|item| *item == "Close")
+            .expect("close tab item");
+
+        app.apply_context_menu_action_via_api(menu, idx);
+
+        assert_eq!(app.state.workspaces.len(), 1);
+        assert_eq!(app.state.workspaces[0].tabs.len(), 1);
+        assert!(app.state.workspaces[0].pinned);
+    }
+
+    #[test]
+    fn api_context_menu_close_pinned_space_asks_first_with_confirm_close_off() {
+        let mut app = app_with_test_workspaces(&["pinned", "other"]);
+        app.state.confirm_close = false;
+        app.state.workspaces[0].pinned = true;
+        app.state.mode = Mode::ContextMenu;
+        let menu = ContextMenuState {
+            kind: ContextMenuKind::Workspace {
+                ws_idx: 0,
+                pinned: true,
+            },
+            x: 0,
+            y: 0,
+            list: MenuListState::new(0),
+        };
+        let idx = menu
+            .items()
+            .iter()
+            .position(|item| *item == "Close")
+            .expect("close workspace item");
+
+        app.apply_context_menu_action_via_api(menu, idx);
+
         assert_eq!(app.state.mode, Mode::ConfirmClose);
         assert_eq!(app.state.workspaces.len(), 2);
     }

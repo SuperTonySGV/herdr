@@ -654,8 +654,11 @@ fn confirm_close_overlay_text(
         String::new()
     };
 
+    let pinned = app.workspaces.get(app.selected).is_some_and(|ws| ws.pinned);
     let title = if closes_group {
         "Close worktree group?"
+    } else if pinned {
+        "Close pinned workspace?"
     } else {
         "Close workspace?"
     };
@@ -794,6 +797,21 @@ mod tests {
 
         assert_eq!(title, "Close workspace?");
         assert_eq!(detail, "current — 1 pane");
+    }
+
+    #[test]
+    fn confirm_close_text_names_a_pinned_workspace_as_pinned() {
+        let mut app = AppState::test_new();
+        let mut workspace = Workspace::test_new("kept");
+        workspace.pinned = true;
+        app.workspaces = vec![workspace];
+        app.ensure_test_terminals();
+        app.selected = 0;
+
+        let terminal_runtimes = crate::terminal::TerminalRuntimeRegistry::new();
+        let (title, _) = confirm_close_overlay_text(&app, &terminal_runtimes);
+
+        assert_eq!(title, "Close pinned workspace?");
     }
 
     #[cfg(unix)]
