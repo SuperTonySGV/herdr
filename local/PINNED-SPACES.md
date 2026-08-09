@@ -147,36 +147,53 @@ an install.
 
 ### The test gate
 
-The script runs the `pin` and `context_menu` filters, then the **broad suite**.
-The broad run needs two Windows-specific accommodations, both upstream's state
-rather than anything this patch caused:
+The script runs the `pin` and `context_menu` filters through `Invoke-GatedTests`,
+which diffs failures against `.local\windows-test-baseline.txt` and fails only
+on names absent from it. **No caller checks an exit code**, and that is load
+bearing rather than tidy.
 
-- **Five tests are skipped by name** because they deadlock and never return.
-  `desktop_new_workspace_creates_immediately_by_default` hangs even alone under
-  `--test-threads=1`, so this is not thread contention. An unfiltered
-  `cargo test` on this machine never finishes.
-- **~106 tests fail on a clean checkout**, so the exit code is useless as a
-  gate. Instead the failures are diffed against `.local\windows-test-baseline.txt`
-  and only names *not* in that list fail the install. A run that hangs past 40
-  minutes also fails rather than wedging forever.
+`cargo test pin` is a *substring* filter, so it also matches
+`codex_osc_title_braille_sPINner_is_working`, one of ~106 tests that fail on
+this machine on a clean checkout. The original exit-code check meant
+`herdr-update` refused to install on any tree at all, and had been doing so
+unnoticed since whatever upstream change broke those spinner tests — nobody runs
+the updater suspecting the updater. Found 2026-08-08 by running it rather than
+reasoning about it.
 
-All three runs — both filters and the broad one — go through the same
-`Invoke-GatedTests` helper, and **no caller checks an exit code**. That is not
-tidiness. `cargo test pin` is a *substring* filter, so it also matches
-`codex_osc_title_braille_sPINner_is_working`, one of the pre-existing
-`detect::manifest` failures. The original exit-code check on that filter meant
-`herdr-update` refused to install on a completely clean tree, and had done since
-whatever upstream change broke those spinner tests — silently, because nobody
-runs the updater expecting it to be the thing at fault. Found 2026-08-08 by
-running the installer rather than reasoning about it.
+The gate is **narrow on purpose**: it protects the patch, not the binary.
 
-This is what makes the update path an actual gate. Until it existed the only
-check was those two filters, which is how the last-tab-close bug (`e65e3bac`)
-reached a running herdr: every test covering it lived on API handlers that the
-broken TUI path never called.
+### Why there is no broad test gate (2026-08-08)
 
-Regenerate the baseline after an upstream rebase shifts it, and keep the diff
-honest — a failure removed from that file is a failure nobody will see again.
+An attempt to gate the install on the full suite was written and then removed.
+It cannot be made to finish on this machine:
+
+- Five tests deadlock deterministically.
+  `desktop_new_workspace_creates_immediately_by_default` hangs alone at
+  `--test-threads=1`, so it is not thread contention.
+- Beyond those, **a shifting handful of PTY-spawning tests stall on every run**,
+  a different set each time — so skipping by name never converges. Three
+  successive 40-minute runs each stalled ~3 fresh names.
+- Lowering parallelism makes it *worse*, not better: `--test-threads=4` stalled
+  at 796/2940 where the default stalled at 2922. So contention is not the
+  mechanism, and the cause is unknown.
+
+Useful diagnostic found late: libtest prints
+`test <name> has been running for over 60 seconds`, which identifies stuck tests
+directly instead of diffing `--list` against completed output.
+
+**Two of the tests added in `e65e3bac` are among the frequent stallers** —
+`tui_close_last_tab_of_pinned_space_reseeds_instead_of_closing_it` and
+`api_context_menu_close_last_tab_of_pinned_space_keeps_the_space`. Both spawn a
+real PTY via `reseed_pinned_workspace`. They pass reliably under the `pin`
+filter, in well under a second, which is how the gate still covers them. Untested
+hypothesis worth trying first: `#[tokio::test]` defaults to a current-thread
+runtime, and the PTY may need background progress that a busy machine starves —
+`#[tokio::test(flavor = "multi_thread")]` is the one-line experiment.
+
+A full run *can* be completed by hand when it matters; one on `e65e3bac` reached
+2928/2940 with 105 failures, all matching the baseline, zero new. Regenerate the
+baseline after an upstream rebase, and keep it honest: a name deleted from that
+file is a failure nobody will ever see again.
 
 Safe to run speculatively -- it exits in about a second when upstream is current
 *and* the installed build matches HEAD. Both conditions are required, which is
