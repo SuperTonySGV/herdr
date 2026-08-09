@@ -160,6 +160,16 @@ rather than anything this patch caused:
   and only names *not* in that list fail the install. A run that hangs past 40
   minutes also fails rather than wedging forever.
 
+All three runs — both filters and the broad one — go through the same
+`Invoke-GatedTests` helper, and **no caller checks an exit code**. That is not
+tidiness. `cargo test pin` is a *substring* filter, so it also matches
+`codex_osc_title_braille_sPINner_is_working`, one of the pre-existing
+`detect::manifest` failures. The original exit-code check on that filter meant
+`herdr-update` refused to install on a completely clean tree, and had done since
+whatever upstream change broke those spinner tests — silently, because nobody
+runs the updater expecting it to be the thing at fault. Found 2026-08-08 by
+running the installer rather than reasoning about it.
+
 This is what makes the update path an actual gate. Until it existed the only
 check was those two filters, which is how the last-tab-close bug (`e65e3bac`)
 reached a running herdr: every test covering it lived on API handlers that the

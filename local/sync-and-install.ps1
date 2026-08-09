@@ -102,32 +102,23 @@ if (-not $?) {
     exit 1
 }
 
-Write-Step 'Running unit tests for the patched behavior...'
-# `pin` covers the flag, persistence and API round-trip; `context_menu` covers
-# the Pin/Unpin entry and the close-by-label selections that an upstream menu
-# reorder would otherwise break silently.
-foreach ($filter in @('pin', 'context_menu')) {
-    cargo test --bins $filter
-    if (-not $?) {
-        Write-Warning "Tests matching '$filter' FAILED after rebase. Not installing."
-        exit 1
-    }
-}
-
-# Then the broad suite. Two Windows-specific problems make this more than a
-# plain `cargo test`, and both are upstream's, not the patch's:
+# Two Windows-specific problems make testing here more than a plain
+# `cargo test`, and both are upstream's state rather than anything this patch
+# caused:
 #
 #  1. A handful of tests that spawn a real PTY deadlock and never return, so an
 #     unfiltered run never finishes. They are skipped by name below.
 #     `desktop_new_workspace_creates_immediately_by_default` hangs even alone at
 #     --test-threads=1, so this is not thread contention that a serial run fixes.
-#  2. ~106 tests fail on a clean checkout. Gating on the exit code would block
-#     every install forever, so instead the failures are diffed against a
-#     recorded baseline and only *new* names are treated as a regression.
+#  2. ~106 tests fail on a clean checkout. Gating on an exit code would block
+#     every install forever, so failures are diffed against a recorded baseline
+#     and only *new* names count as a regression.
 #
-# This is what makes the update path a real gate. Before it existed the only
-# check was the two filters above, which is how a last-tab-close bug in the
-# pinned-spaces patch reached a running herdr (fixed in e65e3bac).
+# Point 2 applies to the narrow filters too, which is not obvious: `pin` is a
+# substring filter and matches `codex_osc_title_braille_sPINner_is_working`,
+# a pre-existing failure. So the old exit-code check on those filters refused
+# every install regardless of the patch. Everything below therefore goes through
+# one baseline-aware helper -- no caller compares an exit code itself.
 $knownHangs = @(
     'desktop_new_workspace_creates_immediately_by_default',
     'new_workspace_key_opens_prefilled_prompt_and_preserves_captured_cwd',
@@ -136,48 +127,77 @@ $knownHangs = @(
     'navigate_mode_runs_prefix_action_rhs_without_pressing_prefix_again'
 )
 $baselineFile = "$repo\.local\windows-test-baseline.txt"
-$broadLog = Join-Path $env:TEMP 'herdr-broad-tests.txt'
-$broadErr = Join-Path $env:TEMP 'herdr-broad-tests.err.txt'
-
-Write-Step "Running the broad suite ($($knownHangs.Count) known-hanging tests skipped; this takes ~15 min)..."
-$testArgs = @('test', '--bins', '--')
-foreach ($h in $knownHangs) { $testArgs += '--skip'; $testArgs += $h }
-$proc = Start-Process -FilePath 'cargo' -ArgumentList $testArgs -NoNewWindow -PassThru `
-    -RedirectStandardOutput $broadLog -RedirectStandardError $broadErr
-# Generous ceiling: the run takes ~15 min, so 40 means something genuinely hung
-# rather than a slow machine. A new hang must not wedge the install forever.
-if (-not $proc.WaitForExit(2400000)) {
-    try { $proc.Kill() } catch { }
-    Write-Warning 'The broad suite did not finish within 40 minutes -- a test is hanging.'
-    Write-Warning "Partial output: $broadLog"
-    Write-Warning 'Not installing. Find the hang, then add it to $knownHangs if it is pre-existing.'
-    exit 1
-}
-
-$failed = @(Select-String -Path $broadLog -Pattern '^test (\S+) \.\.\. FAILED' |
-    ForEach-Object { $_.Matches.Groups[1].Value } | Sort-Object -Unique)
 $baseline = @()
 if (Test-Path $baselineFile) {
     $baseline = @(Get-Content $baselineFile | Where-Object { $_.Trim() -and $_ -notmatch '^\s*#' })
 } else {
-    Write-Warning "No baseline at $baselineFile; treating every failure as new."
+    Write-Warning "No baseline at $baselineFile; every failure will count as new."
 }
 
-$regressions = @($failed | Where-Object { $baseline -notcontains $_ })
-if ($regressions.Count -gt 0) {
-    Write-Warning "$($regressions.Count) test(s) fail that are NOT in the known-failure baseline. Not installing:"
-    $regressions | ForEach-Object { Write-Warning "  $_" }
-    Write-Warning "Full output: $broadLog"
+# Runs cargo test and reports whether anything failed that is NOT already a
+# known Windows failure. Returns $true when the run is acceptable.
+#
+# Timing out is a failure: an unbounded wait would let a newly-introduced hang
+# stall the install indefinitely, which looks identical to a slow build.
+function Invoke-GatedTests {
+    param(
+        [string]$Label,
+        [string[]]$CargoArgs,
+        [int]$TimeoutMs
+    )
+
+    $log = Join-Path $env:TEMP "herdr-tests-$Label.txt"
+    $errLog = Join-Path $env:TEMP "herdr-tests-$Label.err.txt"
+    $proc = Start-Process -FilePath 'cargo' -ArgumentList $CargoArgs -NoNewWindow -PassThru `
+        -RedirectStandardOutput $log -RedirectStandardError $errLog
+    if (-not $proc.WaitForExit($TimeoutMs)) {
+        try { $proc.Kill() } catch { }
+        Write-Warning "[$Label] did not finish within $([int]($TimeoutMs/60000)) minutes -- a test is hanging."
+        Write-Warning "  partial output: $log"
+        Write-Warning '  if the hang is pre-existing, add it to $knownHangs; otherwise it is a real regression.'
+        return $false
+    }
+
+    $failed = @(Select-String -Path $log -Pattern '^test (\S+) \.\.\. FAILED' |
+        ForEach-Object { $_.Matches.Groups[1].Value } | Sort-Object -Unique)
+    $regressions = @($failed | Where-Object { $baseline -notcontains $_ })
+
+    if ($regressions.Count -gt 0) {
+        Write-Warning "[$Label] $($regressions.Count) failure(s) not in the known-failure baseline:"
+        $regressions | ForEach-Object { Write-Warning "    $_" }
+        Write-Warning "  full output: $log"
+        return $false
+    }
+
+    if ($failed.Count -gt 0) {
+        Write-Step "[$Label] passed ($($failed.Count) known baseline failure(s), 0 new)"
+    } else {
+        Write-Step "[$Label] passed"
+    }
+    return $true
+}
+
+# `pin` covers the flag, persistence and API round-trip; `context_menu` covers
+# the Pin/Unpin entry and the close-by-label selections that an upstream menu
+# reorder would otherwise break silently. Both are fast and fail early; the
+# broad run afterwards is the actual safety net.
+Write-Step 'Running unit tests for the patched behavior...'
+foreach ($filter in @('pin', 'context_menu')) {
+    if (-not (Invoke-GatedTests -Label $filter -CargoArgs @('test', '--bins', $filter) -TimeoutMs 600000)) {
+        Write-Warning "Not installing."
+        exit 1
+    }
+}
+
+Write-Step "Running the broad suite ($($knownHangs.Count) known-hanging tests skipped; ~15 min)..."
+$broadArgs = @('test', '--bins', '--')
+foreach ($h in $knownHangs) { $broadArgs += '--skip'; $broadArgs += $h }
+# 40 minutes against a ~15 minute run: slack for a loaded machine, but still a
+# ceiling, so a new hang fails the install instead of wedging it.
+if (-not (Invoke-GatedTests -Label 'broad' -CargoArgs $broadArgs -TimeoutMs 2400000)) {
+    Write-Warning "Not installing."
     exit 1
 }
-
-# Not a failure, just drift worth knowing about: the baseline is stale in the
-# harmless direction and can be trimmed.
-$nowPassing = @($baseline | Where-Object { $failed -notcontains $_ })
-if ($nowPassing.Count -gt 0) {
-    Write-Step "$($nowPassing.Count) baseline failure(s) now pass; consider trimming $baselineFile"
-}
-Write-Step "Broad suite clean against baseline ($($failed.Count) known failures, 0 new)."
 
 Write-Step 'Installing patched binary...'
 
