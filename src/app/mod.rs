@@ -127,6 +127,8 @@ pub struct App {
     pub(crate) last_pane_click: Option<PaneClickState>,
     pub(crate) pending_url_click_sources: HashSet<InputSourceId>,
     pub(crate) next_resize_poll: Instant,
+    /// When the agent panel's `last_active` labels next need repainting.
+    pub(crate) last_active_repaint_deadline: Option<Instant>,
     pub(crate) next_auto_update_check: Option<Instant>,
     pub(crate) next_agent_manifest_update_check: Option<Instant>,
     pub(crate) update_version_check_enabled: bool,
@@ -750,6 +752,7 @@ impl App {
             last_pane_click: None,
             pending_url_click_sources: HashSet::new(),
             next_resize_poll: Instant::now() + RESIZE_POLL_INTERVAL,
+            last_active_repaint_deadline: None,
             next_auto_update_check: version_check_enabled
                 .then_some(Instant::now() + AUTO_UPDATE_CHECK_INTERVAL),
             next_agent_manifest_update_check: manifest_check_enabled

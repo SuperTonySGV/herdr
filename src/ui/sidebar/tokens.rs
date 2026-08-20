@@ -1,3 +1,6 @@
+use std::time::Instant;
+
+use super::last_active::{self, CacheWarmth};
 use super::AgentPanelEntry;
 use crate::config::{
     AgentSidebarToken, AgentsSidebarConfig, SidebarTokenStyle, SpaceSidebarToken,
@@ -21,6 +24,7 @@ pub(super) enum ResolvedTokenKind {
     TerminalTitle(String),
     Branch(String),
     GitStatus { ahead: usize, behind: usize },
+    LastActive { text: String, warmth: CacheWarmth },
     Custom(String),
 }
 
@@ -39,6 +43,7 @@ pub(super) fn agent_rows(
     config: &AgentsSidebarConfig,
     entry: &AgentPanelEntry,
     state_text: &str,
+    now: Instant,
 ) -> Vec<Vec<ResolvedToken>> {
     config
         .rows_for_agent(entry.agent)
@@ -73,6 +78,9 @@ pub(super) fn agent_rows(
                             .terminal_title_stripped
                             .clone()
                             .map(ResolvedTokenKind::TerminalTitle),
+                        AgentSidebarToken::LastActive => {
+                            last_active_kind(entry, now, &config.last_active)
+                        }
                         AgentSidebarToken::Custom(name) => entry
                             .tokens
                             .get(name)
@@ -86,6 +94,41 @@ pub(super) fn agent_rows(
             (!resolved.is_empty()).then_some(resolved)
         })
         .collect()
+}
+
+/// The elapsed side of the `last_active` token: how long since this pane's
+/// agent last changed state, or `None` if it has not changed state yet (a fresh
+/// pane, or one restored from a session where the clock did not survive).
+pub(super) fn elapsed_since_change(
+    entry: &AgentPanelEntry,
+    now: Instant,
+) -> Option<std::time::Duration> {
+    entry
+        .last_agent_state_change_at
+        .map(|changed_at| now.saturating_duration_since(changed_at))
+}
+
+pub(super) fn entry_is_working(entry: &AgentPanelEntry) -> bool {
+    entry.state == crate::detect::AgentState::Working
+}
+
+fn last_active_kind(
+    entry: &AgentPanelEntry,
+    now: Instant,
+    config: &crate::config::LastActiveConfig,
+) -> Option<ResolvedTokenKind> {
+    let elapsed = elapsed_since_change(entry, now)?;
+    let working = entry_is_working(entry);
+    Some(ResolvedTokenKind::LastActive {
+        // A working agent is refreshing its own cache, so it reads `now`
+        // however long it has been at it.
+        text: if working {
+            "now".to_string()
+        } else {
+            last_active::label(elapsed)
+        },
+        warmth: last_active::warmth(elapsed, working, config),
+    })
 }
 
 pub(super) struct SpaceTokenContext<'a> {
@@ -173,6 +216,7 @@ mod tests {
             state: AgentState::Working,
             seen: true,
             last_agent_state_change_seq: None,
+            last_agent_state_change_at: None,
             state_labels: std::collections::HashMap::new(),
             tokens: std::collections::HashMap::new(),
         }
@@ -193,7 +237,7 @@ mod tests {
             ..Default::default()
         };
 
-        let rows = agent_rows(&config, &entry, "working");
+        let rows = agent_rows(&config, &entry, "working", Instant::now());
 
         assert_eq!(rows.len(), 2);
         assert_eq!(
@@ -223,7 +267,7 @@ mod tests {
         };
 
         assert_eq!(
-            agent_rows(&config, &entry, "deep in the mines"),
+            agent_rows(&config, &entry, "deep in the mines", Instant::now()),
             vec![vec![
                 ResolvedToken::unstyled(ResolvedTokenKind::StateText("deep in the mines".into())),
                 ResolvedToken::unstyled(ResolvedTokenKind::Custom("reviewing auth".into())),
@@ -249,7 +293,7 @@ mod tests {
         };
 
         assert_eq!(
-            agent_rows(&config, &entry, "working"),
+            agent_rows(&config, &entry, "working", Instant::now()),
             vec![vec![
                 ResolvedToken::unstyled(ResolvedTokenKind::TerminalTitle("⠋ raw title".into())),
                 ResolvedToken::unstyled(ResolvedTokenKind::TerminalTitle("raw title".into())),
@@ -271,7 +315,7 @@ mod tests {
         pi.agent_label = Some("renamed pi".into());
 
         assert_eq!(
-            agent_rows(&config, &pi, "working"),
+            agent_rows(&config, &pi, "working", Instant::now()),
             vec![vec![ResolvedToken::unstyled(ResolvedTokenKind::Agent(
                 "renamed pi".into()
             ))]]
@@ -279,7 +323,7 @@ mod tests {
 
         pi.agent = None;
         assert_eq!(
-            agent_rows(&config, &pi, "working"),
+            agent_rows(&config, &pi, "working", Instant::now()),
             vec![vec![ResolvedToken::unstyled(ResolvedTokenKind::Workspace(
                 "repo".into()
             ))]]

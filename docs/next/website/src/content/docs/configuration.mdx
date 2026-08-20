@@ -300,7 +300,21 @@ Agent rows accept these built-in tokens:
 - `agent` — detected or reported agent display name.
 - `terminal_title` — latest OSC 0/2 terminal title after safety normalization.
 - `terminal_title_stripped` — the terminal title with one recognized leading activity or spinner glyph and its following whitespace removed.
+- `last_active` — time since the agent last changed state, in the compact form `now`, `27m`, `17h`, `3d`. A working agent always reads `now`. Placed last in a row it is pinned to the sidebar's right edge; anywhere else it flows inline. Rows drop it before truncating the rest of the row, and an agent that has not changed state yet shows nothing.
 - `$name` — custom pane metadata named `name`.
+
+`last_active` also colors itself by how long the agent has been idle, as a
+standing hint about whether resuming that session still hits a warm prompt
+cache: dim while fresh, amber once it is expiring, red once it is assumed cold.
+A working agent stays dim — it is refreshing its own cache. The thresholds
+default to 45 and 60 minutes and are configurable, since the cache lifetime is
+the provider's to change:
+
+```toml
+[ui.sidebar.agents.last_active]
+warn_after_seconds = 2700
+cold_after_seconds = 3600
+```
 
 Space rows accept these built-in tokens:
 

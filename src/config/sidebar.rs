@@ -110,6 +110,7 @@ pub enum AgentSidebarToken {
     Agent,
     TerminalTitle,
     TerminalTitleStripped,
+    LastActive,
     Custom(String),
     Styled {
         token: Box<AgentSidebarToken>,
@@ -240,6 +241,7 @@ fn agent_token_name(token: &AgentSidebarToken) -> String {
         AgentSidebarToken::Agent => "agent".into(),
         AgentSidebarToken::TerminalTitle => "terminal_title".into(),
         AgentSidebarToken::TerminalTitleStripped => "terminal_title_stripped".into(),
+        AgentSidebarToken::LastActive => "last_active".into(),
         AgentSidebarToken::Custom(name) => format!("${name}"),
         AgentSidebarToken::Styled { token, .. } => agent_token_name(token),
     }
@@ -294,6 +296,7 @@ impl<'de> Deserialize<'de> for AgentSidebarToken {
                 ("agent", Self::Agent),
                 ("terminal_title", Self::TerminalTitle),
                 ("terminal_title_stripped", Self::TerminalTitleStripped),
+                ("last_active", Self::LastActive),
             ],
         )
         .map_err(serde::de::Error::custom)?;
@@ -369,6 +372,30 @@ where
     Ok(rows_by_agent)
 }
 
+/// Thresholds for the `last_active` token's colour.
+///
+/// These encode an assumption about the agent's prompt-cache TTL, which is the
+/// provider's to change, so they are configurable rather than hardcoded. The
+/// elapsed number itself is unaffected by them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct LastActiveConfig {
+    /// Idle seconds after which the label warns that the cache is expiring.
+    pub warn_after_seconds: u64,
+    /// Idle seconds after which the cache is assumed cold.
+    pub cold_after_seconds: u64,
+}
+
+impl Default for LastActiveConfig {
+    fn default() -> Self {
+        // 45m/60m: an hour TTL, with a quarter-hour of warning.
+        Self {
+            warn_after_seconds: 45 * 60,
+            cold_after_seconds: 60 * 60,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(default)]
 pub struct AgentsSidebarConfig {
@@ -377,9 +404,21 @@ pub struct AgentsSidebarConfig {
     #[serde(default, deserialize_with = "deserialize_rows_by_agent")]
     pub rows_by_agent: BTreeMap<String, AgentSidebarRows>,
     pub row_gap: u16,
+    pub last_active: LastActiveConfig,
 }
 
 impl AgentsSidebarConfig {
+    /// Whether any configured row shows the elapsed-time token. Gates the
+    /// panel's repaint timer, so a config without it costs nothing.
+    pub(crate) fn uses_last_active(&self) -> bool {
+        let row_uses = |rows: &AgentSidebarRows| {
+            rows.iter()
+                .flatten()
+                .any(|configured| matches!(configured.parts().0, AgentSidebarToken::LastActive))
+        };
+        row_uses(&self.rows) || self.rows_by_agent.values().any(row_uses)
+    }
+
     pub(crate) fn rows_for_agent(&self, agent: Option<Agent>) -> &AgentSidebarRows {
         agent
             .and_then(|agent| self.rows_by_agent.get(crate::detect::agent_label(agent)))
@@ -400,6 +439,7 @@ impl Default for AgentsSidebarConfig {
             ],
             rows_by_agent: BTreeMap::new(),
             row_gap: DEFAULT_SIDEBAR_ROW_GAP,
+            last_active: LastActiveConfig::default(),
         }
     }
 }
@@ -459,6 +499,68 @@ mod tests {
             ]
         );
         assert_eq!(config.spaces.row_gap, 0);
+    }
+
+    #[test]
+    fn parses_last_active_token_and_its_thresholds() {
+        let config: crate::config::Config = toml::from_str(
+            r#"
+[ui.sidebar.agents]
+rows = [["state_icon", "workspace"], ["agent", "last_active"]]
+
+[ui.sidebar.agents.last_active]
+warn_after_seconds = 240
+cold_after_seconds = 300
+"#,
+        )
+        .expect("last_active config");
+
+        assert_eq!(
+            config.ui.sidebar.agents.rows[1],
+            vec![AgentSidebarToken::Agent, AgentSidebarToken::LastActive]
+        );
+        assert_eq!(config.ui.sidebar.agents.last_active.warn_after_seconds, 240);
+        assert_eq!(config.ui.sidebar.agents.last_active.cold_after_seconds, 300);
+        assert!(config.ui.sidebar.agents.uses_last_active());
+    }
+
+    #[test]
+    fn last_active_defaults_to_an_hour_ttl_and_is_off_unless_configured() {
+        let config = AgentsSidebarConfig::default();
+
+        assert_eq!(config.last_active.warn_after_seconds, 45 * 60);
+        assert_eq!(config.last_active.cold_after_seconds, 60 * 60);
+        // Default rows do not show it, so the repaint timer stays disarmed.
+        assert!(!config.uses_last_active());
+    }
+
+    #[test]
+    fn a_styled_last_active_token_still_arms_the_repaint_timer() {
+        let config: crate::config::Config = toml::from_str(
+            r#"
+[ui.sidebar.agents]
+rows = [["agent", { token = "last_active", bold = true }]]
+"#,
+        )
+        .expect("styled last_active config");
+
+        assert!(config.ui.sidebar.agents.uses_last_active());
+    }
+
+    #[test]
+    fn a_per_agent_row_can_arm_the_repaint_timer_on_its_own() {
+        let config: crate::config::Config = toml::from_str(
+            r#"
+[ui.sidebar.agents]
+rows = [["agent"]]
+
+[ui.sidebar.agents.rows_by_agent]
+claude = [["agent", "last_active"]]
+"#,
+        )
+        .expect("per-agent last_active config");
+
+        assert!(config.ui.sidebar.agents.uses_last_active());
     }
 
     #[test]
