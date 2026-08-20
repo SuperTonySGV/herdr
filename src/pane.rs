@@ -35,7 +35,7 @@ mod xtgettcap;
 
 use self::agent_detection::{
     decide_detection_screen_read, decide_screen_detection_publish,
-    detection_update_for_publish_with_osc, mark_detection_content_changed,
+    detection_update_for_publish_with_osc, mark_detection_content_changed, note_agent_activity,
     observe_detection_content_change, DetectionPublishDecision, DetectionScreenReadDecision,
     DetectionScreenReadInput, PendingIdleConfirmation, ScreenDetectionPublishInput,
     AGENT_PENDING_IDLE_RECHECK, AGENT_STARTUP_GRACE_WINDOW,
@@ -625,6 +625,7 @@ fn spawn_basic_detection_task(
     child_pid: Arc<AtomicU32>,
     terminal: Arc<PaneTerminal>,
     detection_content_seq: Arc<AtomicU64>,
+    agent_activity_seq: Arc<AtomicU64>,
     full_lifecycle_authority_active: Arc<AtomicBool>,
     state_events: mpsc::Sender<AppEvent>,
 ) -> (
@@ -848,6 +849,7 @@ fn spawn_basic_detection_task(
             let content = terminal.detection_text();
             last_screen_scan_detection_content_seq = current_detection_content_seq;
             let content_changed = content != last_detection_text;
+            note_agent_activity(&agent_activity_seq, agent, content_changed);
             last_detection_text.clone_from(&content);
             if !process_exited && crate::detect::should_skip_state_update(agent, &content) {
                 pending_idle.clear();
@@ -990,6 +992,11 @@ pub struct PaneRuntime {
     child_wait_completed: Option<Arc<AtomicBool>>,
     kitty_keyboard_flags: Arc<AtomicU16>,
     detection_content_seq: Arc<AtomicU64>,
+    /// Bumped every time the pane's agent changes what is on screen. The
+    /// sidebar's `last_active` token counts from this rather than from state
+    /// transitions: an agent can chat for hours without its detected state ever
+    /// moving, and "time since it last did anything" has to keep up with that.
+    agent_activity_seq: Arc<AtomicU64>,
     full_lifecycle_authority_active: Arc<AtomicBool>,
     detect_reset_notify: Arc<Notify>,
     pending_release: Arc<Mutex<Option<PendingAgentRelease>>>,
@@ -1866,6 +1873,7 @@ impl PaneRuntime {
         let reported_cwd = Arc::new(Mutex::new(None));
         let kitty_keyboard_flags = Arc::new(AtomicU16::new(keyboard_protocol_flags));
         let detection_content_seq = Arc::new(AtomicU64::new(0));
+        let agent_activity_seq = Arc::new(AtomicU64::new(0));
 
         let io = {
             let terminal = terminal.clone();
@@ -1933,6 +1941,7 @@ impl PaneRuntime {
             child_pid.clone(),
             terminal.clone(),
             detection_content_seq.clone(),
+            agent_activity_seq.clone(),
             full_lifecycle_authority_active.clone(),
             events,
         );
@@ -1947,6 +1956,7 @@ impl PaneRuntime {
             child_wait_completed: None,
             kitty_keyboard_flags,
             detection_content_seq,
+            agent_activity_seq,
             full_lifecycle_authority_active,
             detect_reset_notify,
             pending_release,
@@ -2002,6 +2012,7 @@ impl PaneRuntime {
         let reported_cwd = Arc::new(Mutex::new(None));
         let child_wait_completed = Arc::new(AtomicBool::new(false));
         let detection_content_seq = Arc::new(AtomicU64::new(0));
+        let agent_activity_seq = Arc::new(AtomicU64::new(0));
         let full_lifecycle_authority_active = Arc::new(AtomicBool::new(false));
         {
             let child_pid = child_pid.clone();
@@ -2103,6 +2114,7 @@ impl PaneRuntime {
             let terminal = terminal.clone();
             let state_events = events.clone();
             let detection_content_seq = detection_content_seq.clone();
+            let agent_activity_seq_for_task = agent_activity_seq.clone();
             let full_lifecycle_authority_active_for_task = full_lifecycle_authority_active.clone();
             let render_notify = render_notify.clone();
             let render_dirty = render_dirty.clone();
@@ -2373,6 +2385,7 @@ impl PaneRuntime {
                     let content = terminal.detection_text();
                     last_screen_scan_detection_content_seq = current_detection_content_seq;
                     let content_changed = content != last_detection_text;
+                    note_agent_activity(&agent_activity_seq_for_task, agent, content_changed);
                     last_detection_text.clone_from(&content);
                     if detect::should_skip_state_update(agent, &content) {
                         pending_idle.clear();
@@ -2465,6 +2478,7 @@ impl PaneRuntime {
             child_wait_completed: Some(child_wait_completed),
             kitty_keyboard_flags,
             detection_content_seq,
+            agent_activity_seq,
             full_lifecycle_authority_active,
             detect_reset_notify,
             pending_release,
@@ -2481,6 +2495,12 @@ impl PaneRuntime {
             });
         }
         self.detect_reset_notify.notify_one();
+    }
+
+    /// Monotonic count of screen changes this pane's agent has made. The app
+    /// polls it to stamp `last_agent_activity_at`; see `note_agent_activity`.
+    pub fn agent_activity_seq(&self) -> u64 {
+        self.agent_activity_seq.load(Ordering::Relaxed)
     }
 
     pub fn reset_agent_detection(&self) {
@@ -2960,6 +2980,7 @@ impl PaneRuntime {
                 child_wait_completed: None,
                 kitty_keyboard_flags: Arc::new(AtomicU16::new(0)),
                 detection_content_seq: Arc::new(AtomicU64::new(0)),
+                agent_activity_seq: Arc::new(AtomicU64::new(0)),
                 full_lifecycle_authority_active: Arc::new(AtomicBool::new(false)),
                 detect_reset_notify: Arc::new(Notify::new()),
                 pending_release: Arc::new(Mutex::new(None)),
@@ -3514,6 +3535,7 @@ mod tests {
             child_wait_completed: None,
             kitty_keyboard_flags: Arc::new(AtomicU16::new(0)),
             detection_content_seq: Arc::new(AtomicU64::new(0)),
+            agent_activity_seq: Arc::new(AtomicU64::new(0)),
             full_lifecycle_authority_active: Arc::new(AtomicBool::new(false)),
             detect_reset_notify: Arc::new(Notify::new()),
             pending_release: Arc::new(Mutex::new(None)),
@@ -3545,6 +3567,7 @@ mod tests {
             child_wait_completed: None,
             kitty_keyboard_flags: Arc::new(AtomicU16::new(0)),
             detection_content_seq: Arc::new(AtomicU64::new(0)),
+            agent_activity_seq: Arc::new(AtomicU64::new(0)),
             full_lifecycle_authority_active: Arc::new(AtomicBool::new(false)),
             detect_reset_notify: Arc::new(Notify::new()),
             pending_release: Arc::new(Mutex::new(None)),

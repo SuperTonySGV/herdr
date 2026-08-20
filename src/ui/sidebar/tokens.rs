@@ -97,12 +97,13 @@ pub(super) fn agent_rows(
 }
 
 /// The elapsed side of the `last_active` token: how long since this pane's
-/// agent last changed state, or `None` if it has not changed state yet (a fresh
-/// pane, or one restored from a session where the clock did not survive).
-fn elapsed_since_change(entry: &AgentPanelEntry, now: Instant) -> Option<std::time::Duration> {
+/// agent last did anything, or `None` if it has not been seen doing anything
+/// yet (a fresh pane, or one restored from a session where the clock did not
+/// survive).
+fn elapsed_since_activity(entry: &AgentPanelEntry, now: Instant) -> Option<std::time::Duration> {
     entry
-        .last_agent_state_change_at
-        .map(|changed_at| now.saturating_duration_since(changed_at))
+        .last_active_at
+        .map(|active_at| now.saturating_duration_since(active_at))
 }
 
 fn entry_is_working(entry: &AgentPanelEntry) -> bool {
@@ -114,7 +115,7 @@ fn last_active_kind(
     now: Instant,
     config: &crate::config::LastActiveConfig,
 ) -> Option<ResolvedTokenKind> {
-    let elapsed = elapsed_since_change(entry, now)?;
+    let elapsed = elapsed_since_activity(entry, now)?;
     let working = entry_is_working(entry);
     Some(ResolvedTokenKind::LastActive {
         // A working agent is refreshing its own cache, so it reads `now`
@@ -213,7 +214,7 @@ mod tests {
             state: AgentState::Working,
             seen: true,
             last_agent_state_change_seq: None,
-            last_agent_state_change_at: None,
+            last_active_at: None,
             state_labels: std::collections::HashMap::new(),
             tokens: std::collections::HashMap::new(),
         }

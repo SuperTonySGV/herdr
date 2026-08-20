@@ -21,7 +21,9 @@ pub struct PaneDetail {
     pub state: AgentState,
     pub seen: bool,
     pub last_agent_state_change_seq: Option<u64>,
-    pub last_agent_state_change_at: Option<std::time::Instant>,
+    /// When this pane's agent was last doing something -- screen activity or,
+    /// failing that, a state change. Drives the sidebar's `last_active` token.
+    pub last_active_at: Option<std::time::Instant>,
     pub state_labels: HashMap<String, String>,
     pub tokens: HashMap<String, String>,
 }
@@ -65,7 +67,7 @@ impl Tab {
                     state: terminal.state,
                     seen: pane.seen,
                     last_agent_state_change_seq: terminal.last_agent_state_change_seq,
-                    last_agent_state_change_at: terminal.last_agent_state_change_at,
+                    last_active_at: terminal.last_agent_active_at(),
                     state_labels: presentation.state_labels,
                     tokens: terminal.metadata_tokens.values(),
                 })

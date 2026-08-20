@@ -322,6 +322,23 @@ pub(super) fn observe_detection_content_change(bytes: &[u8], detection_content_s
     }
 }
 
+/// Records that the pane's agent changed what is on screen, which is what the
+/// sidebar's `last_active` token means by "did something".
+///
+/// Screen text rather than raw bytes: a repaint that redraws the same frame is
+/// not activity, and an agent that never leaves one detected state would
+/// otherwise look untouched however much it was chatting. Only counted while an
+/// agent holds the pane -- a bare shell has no session to keep warm.
+pub(super) fn note_agent_activity(
+    agent_activity_seq: &AtomicU64,
+    agent: Option<crate::detect::Agent>,
+    content_changed: bool,
+) {
+    if agent.is_some() && content_changed {
+        agent_activity_seq.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
 pub(super) fn mark_detection_content_changed(detection_content_seq: &AtomicU64) {
     detection_content_seq.fetch_add(1, Ordering::Relaxed);
 }
@@ -329,6 +346,22 @@ pub(super) fn mark_detection_content_changed(detection_content_seq: &AtomicU64) 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn agent_activity_counts_only_real_screen_changes_under_an_agent() {
+        let seq = AtomicU64::new(0);
+
+        // A repaint that draws the same frame is not the agent doing anything.
+        note_agent_activity(&seq, Some(crate::detect::Agent::Claude), false);
+        assert_eq!(seq.load(Ordering::Relaxed), 0);
+
+        // Nor is a bare shell scrolling: there is no agent session to keep warm.
+        note_agent_activity(&seq, None, true);
+        assert_eq!(seq.load(Ordering::Relaxed), 0);
+
+        note_agent_activity(&seq, Some(crate::detect::Agent::Claude), true);
+        assert_eq!(seq.load(Ordering::Relaxed), 1);
+    }
 
     fn publish_state(state: AgentState) -> DetectionPublishState {
         DetectionPublishState {

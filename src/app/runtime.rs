@@ -297,6 +297,8 @@ impl App {
             self.next_resize_poll = now + RESIZE_POLL_INTERVAL;
         }
 
+        changed |= self.sync_agent_activity(now);
+
         // The agent panel's elapsed-time labels are the only thing in the UI
         // that goes stale on its own, so they get their own repaint deadline.
         if self
@@ -425,6 +427,25 @@ impl App {
             return true;
         }
         false
+    }
+
+    /// Polls each pane runtime's activity counter and stamps the terminals that
+    /// moved, so the sidebar's `last_active` token counts from what the agent
+    /// last did rather than from its last state transition.
+    ///
+    /// Polled rather than pushed: the counter is bumped on the detection task,
+    /// several times a second under load, and an app event per screen change
+    /// would be a lot of traffic to carry one timestamp.
+    pub(crate) fn sync_agent_activity(&mut self, now: Instant) -> bool {
+        let runtimes = &self.terminal_runtimes;
+        let mut changed = false;
+        for (terminal_id, terminal) in self.state.terminals.iter_mut() {
+            let Some(runtime) = runtimes.get(terminal_id) else {
+                continue;
+            };
+            changed |= terminal.observe_agent_activity_seq(runtime.agent_activity_seq(), now);
+        }
+        changed
     }
 
     /// Re-arms the agent panel's repaint deadline for whichever entry's label
