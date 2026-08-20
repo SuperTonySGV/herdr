@@ -99,16 +99,13 @@ pub(super) fn agent_rows(
 /// The elapsed side of the `last_active` token: how long since this pane's
 /// agent last changed state, or `None` if it has not changed state yet (a fresh
 /// pane, or one restored from a session where the clock did not survive).
-pub(super) fn elapsed_since_change(
-    entry: &AgentPanelEntry,
-    now: Instant,
-) -> Option<std::time::Duration> {
+fn elapsed_since_change(entry: &AgentPanelEntry, now: Instant) -> Option<std::time::Duration> {
     entry
         .last_agent_state_change_at
         .map(|changed_at| now.saturating_duration_since(changed_at))
 }
 
-pub(super) fn entry_is_working(entry: &AgentPanelEntry) -> bool {
+fn entry_is_working(entry: &AgentPanelEntry) -> bool {
     entry.state == crate::detect::AgentState::Working
 }
 
