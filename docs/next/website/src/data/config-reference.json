@@ -719,6 +719,18 @@
           ]
         },
         {
+          "key": "ui.sidebar.agents.last_active.cold_after_seconds",
+          "type": "integer",
+          "default": "3600",
+          "description": "Idle seconds after which the last_active token treats the agent's prompt cache as cold and colors the elapsed time red."
+        },
+        {
+          "key": "ui.sidebar.agents.last_active.warn_after_seconds",
+          "type": "integer",
+          "default": "2700",
+          "description": "Idle seconds after which the last_active token warns that the agent's prompt cache is expiring and colors the elapsed time amber."
+        },
+        {
           "key": "ui.sidebar.agents.row_gap",
           "type": "integer",
           "default": "0",

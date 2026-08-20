@@ -297,6 +297,16 @@ impl App {
             self.next_resize_poll = now + RESIZE_POLL_INTERVAL;
         }
 
+        // The agent panel's elapsed-time labels are the only thing in the UI
+        // that goes stale on its own, so they get their own repaint deadline.
+        if self
+            .last_active_repaint_deadline
+            .is_some_and(|deadline| now >= deadline)
+        {
+            changed = true;
+        }
+        self.sync_last_active_repaint_deadline(now);
+
         if self
             .config_diagnostic_deadline
             .is_some_and(|deadline| now >= deadline)
@@ -415,6 +425,13 @@ impl App {
             return true;
         }
         false
+    }
+
+    /// Re-arms the agent panel's repaint deadline for whichever entry's label
+    /// changes soonest. Cheap enough to run on every scheduled-task pass, and
+    /// self-healing: state changes move the deadline on the next pass.
+    pub(crate) fn sync_last_active_repaint_deadline(&mut self, now: Instant) {
+        self.last_active_repaint_deadline = crate::ui::next_last_active_change(&self.state, now);
     }
 
     pub(crate) fn sync_agent_metadata_deadline(&mut self) {
@@ -610,6 +627,7 @@ impl App {
             self.session_save_deadline,
             self.selection_autoscroll_deadline,
             self.selection_highlight_clear_deadline,
+            self.last_active_repaint_deadline,
             render_deadline,
         ]
         .into_iter()

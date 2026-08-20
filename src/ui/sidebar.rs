@@ -1,4 +1,7 @@
+mod last_active;
 mod tokens;
+
+use std::time::Instant;
 
 use ratatui::{
     layout::{Alignment, Rect},
@@ -8,6 +11,7 @@ use ratatui::{
     Frame,
 };
 
+use self::last_active::CacheWarmth;
 use self::tokens::{ResolvedToken, ResolvedTokenKind, SpaceTokenContext};
 use super::scrollbar::{render_scrollbar, should_show_scrollbar};
 use super::status::{state_icon, state_label, state_label_color};
@@ -16,6 +20,10 @@ use crate::app::state::{AgentPanelSort, Palette};
 use crate::app::{AppState, Mode};
 use crate::detect::AgentState;
 use crate::terminal::TerminalRuntimeRegistry;
+
+/// Columns the rest of a row needs before `last_active` may take the right
+/// edge. Three characters and an ellipsis: less than that names nothing.
+const MIN_HEAD_WIDTH_BESIDE_LAST_ACTIVE: usize = 4;
 
 const WORKSPACE_SECTION_HEADER_ROWS: u16 = 2;
 const AGENT_PANEL_HEADER_ROWS: u16 = 3;
@@ -35,6 +43,7 @@ pub(crate) struct AgentPanelEntry {
     pub state: AgentState,
     pub seen: bool,
     pub last_agent_state_change_seq: Option<u64>,
+    pub last_agent_state_change_at: Option<std::time::Instant>,
     pub state_labels: std::collections::HashMap<String, String>,
     pub tokens: std::collections::HashMap<String, String>,
 }
@@ -179,12 +188,36 @@ fn collect_agent_panel_entries_with_runtimes(
                         state: detail.state,
                         seen: detail.seen,
                         last_agent_state_change_seq: detail.last_agent_state_change_seq,
+                        last_agent_state_change_at: detail.last_agent_state_change_at,
                         state_labels: detail.state_labels,
                         tokens: detail.tokens,
                     }
                 })
         })
         .collect()
+}
+
+/// When the agent panel's `last_active` labels would next change, so the app
+/// can repaint exactly then instead of polling. `None` when no configured row
+/// shows the token, or when nothing has a timestamp to count from yet.
+///
+/// Reads terminals directly rather than building panel entries: a filtered-out
+/// pane only ever costs an early repaint, and this runs on every loop pass.
+pub(crate) fn next_last_active_change(app: &AppState, now: std::time::Instant) -> Option<Instant> {
+    if !app.sidebar_agents.uses_last_active() {
+        return None;
+    }
+    let config = &app.sidebar_agents.last_active;
+    app.terminals
+        .values()
+        .filter_map(|terminal| {
+            let changed_at = terminal.last_agent_state_change_at?;
+            let elapsed = now.saturating_duration_since(changed_at);
+            let working = terminal.state == AgentState::Working;
+            Some(last_active::next_change(elapsed, working, config))
+        })
+        .min()
+        .map(|step| now + step)
 }
 
 pub(super) fn agent_panel_status_key(state: AgentState, seen: bool) -> &'static str {
@@ -546,13 +579,17 @@ pub(crate) fn agent_panel_body_rect(area: Rect, has_scrollbar: bool) -> Rect {
     Rect::new(area.x, body_y, body_width, body_height)
 }
 
-fn resolved_agent_rows(app: &AppState, entry: &AgentPanelEntry) -> Vec<Vec<ResolvedToken>> {
+fn resolved_agent_rows(
+    app: &AppState,
+    entry: &AgentPanelEntry,
+    now: std::time::Instant,
+) -> Vec<Vec<ResolvedToken>> {
     let label = entry
         .state_labels
         .get(agent_panel_status_key(entry.state, entry.seen))
         .map(String::as_str)
         .unwrap_or_else(|| state_label(entry.state, entry.seen));
-    tokens::agent_rows(&app.sidebar_agents, entry, label)
+    tokens::agent_rows(&app.sidebar_agents, entry, label, now)
 }
 
 pub(crate) fn agent_entry_height_in_body(
@@ -560,7 +597,7 @@ pub(crate) fn agent_entry_height_in_body(
     entry: &AgentPanelEntry,
     body_height: u16,
 ) -> u16 {
-    (resolved_agent_rows(app, entry)
+    (resolved_agent_rows(app, entry, std::time::Instant::now())
         .len()
         .max(1)
         .min(u16::MAX as usize) as u16)
@@ -1004,7 +1041,101 @@ pub(super) fn render_sidebar(
     render_sidebar_toggle(app, frame, area, false, p);
 }
 
+/// Splits a trailing `last_active` token off the row so it can be pinned to the
+/// right edge. Anywhere else in the row it flows inline like any other token.
 fn resolved_token_spans(
+    resolved: &[ResolvedToken],
+    state_icon: (&str, Style),
+    state_text_style: Style,
+    workspace_style: Style,
+    secondary_style: Style,
+    custom_style: Style,
+    p: &Palette,
+    max_width: usize,
+) -> Vec<Span<'static>> {
+    let (head, trailing) = match resolved.split_last() {
+        Some((last, head)) if matches!(last.kind, ResolvedTokenKind::LastActive { .. }) => {
+            (head, Some(last))
+        }
+        _ => (resolved, None),
+    };
+    let Some(trailing) = trailing else {
+        return flow_token_spans(
+            resolved,
+            state_icon,
+            state_text_style,
+            workspace_style,
+            secondary_style,
+            custom_style,
+            p,
+            max_width,
+        );
+    };
+    let ResolvedTokenKind::LastActive { text, warmth } = &trailing.kind else {
+        unreachable!("split_last matched a LastActive token")
+    };
+
+    let trailing_width = display_width(text);
+    // One column of breathing room, plus enough left over for the rest of the
+    // row to say something. Below that the row is too narrow to carry both, and
+    // an agent's identity matters more than its clock.
+    let head_budget = max_width.saturating_sub(trailing_width + 1);
+    if !head.is_empty() && head_budget < MIN_HEAD_WIDTH_BESIDE_LAST_ACTIVE {
+        return flow_token_spans(
+            head,
+            state_icon,
+            state_text_style,
+            workspace_style,
+            secondary_style,
+            custom_style,
+            p,
+            max_width,
+        );
+    }
+    if max_width < trailing_width {
+        return Vec::new();
+    }
+
+    let mut spans = flow_token_spans(
+        head,
+        state_icon,
+        state_text_style,
+        workspace_style,
+        secondary_style,
+        custom_style,
+        p,
+        head_budget,
+    );
+    let used = spans
+        .iter()
+        .map(|span| display_width(&span.content))
+        .sum::<usize>();
+    let padding = max_width.saturating_sub(used + trailing_width);
+    if padding > 0 {
+        spans.push(Span::raw(" ".repeat(padding)));
+    }
+    spans.push(Span::styled(
+        text.clone(),
+        apply_token_style(last_active_style(*warmth, p), trailing.style),
+    ));
+    spans
+}
+
+/// The colour half of the `last_active` token: how warm this pane's prompt
+/// cache still is. Advisory only — the number beside it stands on its own.
+fn last_active_style(warmth: CacheWarmth, p: &Palette) -> Style {
+    match warmth {
+        // Working agents refresh their own cache; idle-but-fresh ones are fine.
+        CacheWarmth::Live | CacheWarmth::Warm => {
+            Style::default().fg(p.overlay0).add_modifier(Modifier::DIM)
+        }
+        CacheWarmth::Expiring => Style::default().fg(p.yellow),
+        CacheWarmth::Cold => Style::default().fg(p.red).add_modifier(Modifier::DIM),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn flow_token_spans(
     resolved: &[ResolvedToken],
     state_icon: (&str, Style),
     state_text_style: Style,
@@ -1018,6 +1149,7 @@ fn resolved_token_spans(
         .iter()
         .map(|token| match &token.kind {
             ResolvedTokenKind::StateIcon => display_width(state_icon.0),
+            ResolvedTokenKind::LastActive { text, .. } => display_width(text),
             ResolvedTokenKind::GitStatus { ahead, behind } => {
                 usize::from(*ahead > 0) * display_width(&format!("↑{ahead}"))
                     + usize::from(*behind > 0) * display_width(&format!("↓{behind}"))
@@ -1173,6 +1305,12 @@ fn resolved_token_spans(
                 spans.push(Span::styled(
                     truncate_end(text, budgets[index]),
                     apply_token_style(custom_style, token.style),
+                ));
+            }
+            ResolvedTokenKind::LastActive { text, warmth } => {
+                spans.push(Span::styled(
+                    text.clone(),
+                    apply_token_style(last_active_style(*warmth, p), token.style),
                 ));
             }
         }
@@ -1492,12 +1630,13 @@ fn render_agent_detail(
         return;
     }
 
+    let now = std::time::Instant::now();
     let scroll = app.agent_panel_scroll.min(metrics.max_offset_from_bottom);
     let mut row_y = body.y;
     let body_bottom = body.y + body.height;
     for (index, detail) in details.iter().enumerate().skip(scroll) {
         let label_color = state_label_color(detail.state, detail.seen, p);
-        let rows = resolved_agent_rows(app, detail);
+        let rows = resolved_agent_rows(app, detail, now);
         let height = (rows.len().max(1) as u16).min(body.height);
         if row_y.saturating_add(height) > body_bottom {
             break;
@@ -1876,6 +2015,97 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
         assert_eq!(metrics.max_offset_from_bottom, 0);
         assert_eq!(row_text(buffer, body.y, body.width), " pi");
         assert_eq!(row_text(buffer, body.y + 1, body.width), " claude");
+    }
+
+    /// Sets one pane's agent and backdates its last state change, returning the
+    /// app ready to render a `last_active` row.
+    fn app_with_idle_agent(idle_for: std::time::Duration) -> crate::app::state::AppState {
+        let mut app = crate::app::state::AppState::test_new();
+        let workspace = Workspace::test_new("qbt");
+        let pane_id = workspace.tabs[0].root_pane;
+        app.workspaces = vec![workspace];
+        app.ensure_test_terminals();
+        let terminal_id = app.workspaces[0].tabs[0].panes[&pane_id]
+            .attached_terminal_id
+            .clone();
+        let terminal = app.terminals.get_mut(&terminal_id).unwrap();
+        terminal.detected_agent = Some(Agent::Claude);
+        terminal.state = AgentState::Idle;
+        terminal.last_agent_state_change_at = Instant::now().checked_sub(idle_for);
+        app.sidebar_agents.rows = vec![vec![
+            crate::config::AgentSidebarToken::Agent,
+            crate::config::AgentSidebarToken::LastActive,
+        ]];
+        app
+    }
+
+    fn rendered_agent_row(app: &crate::app::state::AppState, width: u16) -> String {
+        let area = Rect::new(0, 0, width, 6);
+        let mut terminal = Terminal::new(TestBackend::new(width, 6)).unwrap();
+        terminal
+            .draw(|frame| render_agent_detail(app, &TerminalRuntimeRegistry::new(), frame, area))
+            .unwrap();
+        let body = agent_panel_body_rect(area, false);
+        row_text(terminal.backend().buffer(), body.y, body.width)
+    }
+
+    #[test]
+    fn last_active_pins_the_elapsed_time_to_the_right_edge() {
+        let app = app_with_idle_agent(std::time::Duration::from_secs(27 * 60));
+        let row = rendered_agent_row(&app, 20);
+
+        assert!(row.starts_with(" claude"), "rendered row: {row:?}");
+        assert!(row.ends_with("27m"), "rendered row: {row:?}");
+        // Right-aligned, not appended: the gap is padding, not a separator.
+        assert!(!row.contains('·'), "rendered row: {row:?}");
+    }
+
+    #[test]
+    fn a_working_agent_reads_now_however_long_it_has_worked() {
+        let mut app = app_with_idle_agent(std::time::Duration::from_secs(2 * 60 * 60));
+        for terminal in app.terminals.values_mut() {
+            terminal.state = AgentState::Working;
+        }
+
+        let row = rendered_agent_row(&app, 20);
+        assert!(row.ends_with("now"), "rendered row: {row:?}");
+    }
+
+    #[test]
+    fn an_entry_that_never_changed_state_shows_no_time() {
+        let mut app = app_with_idle_agent(std::time::Duration::from_secs(60));
+        for terminal in app.terminals.values_mut() {
+            terminal.last_agent_state_change_at = None;
+        }
+
+        let row = rendered_agent_row(&app, 20);
+        assert_eq!(row.trim_end(), " claude");
+    }
+
+    #[test]
+    fn a_narrow_row_drops_the_time_before_the_agent_name() {
+        let app = app_with_idle_agent(std::time::Duration::from_secs(27 * 60));
+        let row = rendered_agent_row(&app, 8);
+
+        assert!(row.contains("cla"), "rendered row: {row:?}");
+        assert!(!row.contains("27m"), "rendered row: {row:?}");
+    }
+
+    #[test]
+    fn last_active_repaint_deadline_is_armed_only_when_the_token_is_configured() {
+        let mut app = app_with_idle_agent(std::time::Duration::from_secs(90));
+        // Pin both ends of the elapsed calculation so the assertion is exact.
+        let now = Instant::now();
+        for terminal in app.terminals.values_mut() {
+            terminal.last_agent_state_change_at =
+                now.checked_sub(std::time::Duration::from_secs(90));
+        }
+        let armed = next_last_active_change(&app, now).expect("token configured");
+        // 90s idle: the label flips to `2m` in another 30.
+        assert_eq!(armed, now + std::time::Duration::from_secs(30));
+
+        app.sidebar_agents.rows = vec![vec![crate::config::AgentSidebarToken::Agent]];
+        assert!(next_last_active_change(&app, now).is_none());
     }
 
     #[test]
