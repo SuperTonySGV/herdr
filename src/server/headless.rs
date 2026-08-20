@@ -4517,6 +4517,19 @@ impl HeadlessServer {
 
         changed |= self.app.clear_due_selection_highlight(now);
 
+        // Same pair as `App::handle_scheduled_tasks`: notice what the agents
+        // have done, then re-arm the panel's own repaint deadline. The server
+        // renders for its clients, so it needs both as much as the local app.
+        changed |= self.app.sync_agent_activity(now);
+        if self
+            .app
+            .last_active_repaint_deadline
+            .is_some_and(|deadline| now >= deadline)
+        {
+            changed = true;
+        }
+        self.app.sync_last_active_repaint_deadline(now);
+
         if self.has_app_client() {
             self.app.start_git_status_refresh_if_due(now);
         }

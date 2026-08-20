@@ -140,10 +140,22 @@ pub struct TerminalState {
     metadata_token_sequence_sources: std::collections::HashSet<String>,
     pub state: AgentState,
     pub last_agent_state_change_seq: Option<u64>,
-    /// When the agent's effective state last changed. Drives the sidebar's
-    /// `last_active` token; `Instant` rather than a wall clock because it is
-    /// only ever read as an elapsed duration and never persisted.
+    /// When the agent's effective state last changed. `Instant` rather than a
+    /// wall clock because it is only ever read as an elapsed duration and never
+    /// persisted.
     pub last_agent_state_change_at: Option<Instant>,
+    /// When the agent last changed what is on screen. This, not the state
+    /// change above, is what the sidebar's `last_active` token counts from:
+    /// detected state can sit still for hours while an agent chats.
+    ///
+    /// Stays `None` for a pane whose agent owns its full lifecycle through
+    /// hooks -- the detector stops reading that screen entirely, and the hook
+    /// reports every turn boundary anyway, so the state change is the better
+    /// signal there. `last_agent_active_at` picks whichever is available.
+    pub last_agent_activity_at: Option<Instant>,
+    /// Last `agent_activity_seq` seen from this terminal's pane runtime. A
+    /// change means the agent did something since the previous poll.
+    last_observed_agent_activity_seq: Option<u64>,
     pub revision: u64,
     pub launch_argv: Option<Vec<String>>,
     pub respawn_shell_on_exit: bool,
@@ -178,6 +190,8 @@ impl TerminalState {
             state: AgentState::Unknown,
             last_agent_state_change_seq: None,
             last_agent_state_change_at: None,
+            last_agent_activity_at: None,
+            last_observed_agent_activity_seq: None,
             revision: 0,
             launch_argv: None,
             respawn_shell_on_exit: false,
@@ -1719,6 +1733,35 @@ impl TerminalState {
             .and_then(crate::detect::parse_agent_label)
     }
 
+    /// Folds a fresh `agent_activity_seq` reading from the pane runtime into
+    /// `last_agent_activity_at`. Returns whether the stamp moved.
+    ///
+    /// The first reading only seeds the baseline: a terminal adopted mid-flight
+    /// -- restored from a session, or attached to an already-running pane --
+    /// has no idea when the count it is looking at was reached, and guessing
+    /// `now` would claim activity that may be hours old.
+    pub(crate) fn observe_agent_activity_seq(&mut self, seq: u64, now: Instant) -> bool {
+        match self.last_observed_agent_activity_seq.replace(seq) {
+            Some(previous) if previous == seq => false,
+            Some(_) => {
+                self.last_agent_activity_at = Some(now);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// When this terminal's agent was last known to be doing something, for the
+    /// sidebar's `last_active` token. Screen activity is the primary signal;
+    /// a state change with no visible output (a hook report, an agent being
+    /// released) still counts, so the later of the two wins.
+    pub fn last_agent_active_at(&self) -> Option<Instant> {
+        match (self.last_agent_activity_at, self.last_agent_state_change_at) {
+            (Some(activity), Some(state_change)) => Some(activity.max(state_change)),
+            (activity, state_change) => activity.or(state_change),
+        }
+    }
+
     pub(crate) fn unchanged_effective_state_change_at(&self, now: Instant) -> EffectiveStateChange {
         let agent_label = self.effective_agent_label().map(str::to_string);
         let known_agent = self.effective_known_agent();
@@ -1947,6 +1990,8 @@ impl TerminalState {
         self.state = AgentState::Unknown;
         self.last_agent_state_change_seq = None;
         self.last_agent_state_change_at = None;
+        self.last_agent_activity_at = None;
+        self.last_observed_agent_activity_seq = None;
         self.launch_argv = None;
         self.respawn_shell_on_exit = false;
         self.recent_agent_process_exit = None;
@@ -2087,6 +2132,47 @@ mod tests {
             agent: agent_label.into(),
             session_ref,
         });
+    }
+
+    #[test]
+    fn the_first_activity_reading_only_seeds_the_baseline() {
+        // A terminal can be adopted with the counter already well above zero --
+        // restored from a session, or attached to a pane that has been running
+        // for hours. Stamping `now` for that first reading would claim activity
+        // that never happened.
+        let mut terminal = test_terminal();
+        let now = Instant::now();
+
+        assert!(!terminal.observe_agent_activity_seq(41, now));
+        assert_eq!(terminal.last_agent_activity_at, None);
+
+        let later = now + Duration::from_secs(1);
+        assert!(terminal.observe_agent_activity_seq(42, later));
+        assert_eq!(terminal.last_agent_activity_at, Some(later));
+
+        // A quiet poll leaves the stamp where it was.
+        let later_still = later + Duration::from_secs(1);
+        assert!(!terminal.observe_agent_activity_seq(42, later_still));
+        assert_eq!(terminal.last_agent_activity_at, Some(later));
+    }
+
+    #[test]
+    fn last_agent_active_at_reads_whichever_signal_is_newer() {
+        let mut terminal = test_terminal();
+        let now = Instant::now();
+        assert_eq!(terminal.last_agent_active_at(), None);
+
+        terminal.last_agent_state_change_at = Some(now);
+        assert_eq!(terminal.last_agent_active_at(), Some(now));
+
+        let later = now + Duration::from_secs(60);
+        terminal.last_agent_activity_at = Some(later);
+        assert_eq!(terminal.last_agent_active_at(), Some(later));
+
+        // And back the other way: a hook state change with nothing on screen.
+        let later_still = later + Duration::from_secs(60);
+        terminal.last_agent_state_change_at = Some(later_still);
+        assert_eq!(terminal.last_agent_active_at(), Some(later_still));
     }
 
     #[test]

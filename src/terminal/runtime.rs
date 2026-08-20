@@ -234,6 +234,12 @@ impl TerminalRuntime {
         self.0.begin_graceful_release(agent);
     }
 
+    /// Monotonic count of screen changes this pane's agent has made, polled by
+    /// the app to keep `last_agent_activity_at` current.
+    pub fn agent_activity_seq(&self) -> u64 {
+        self.0.agent_activity_seq()
+    }
+
     pub fn reset_agent_detection(&self) {
         self.0.reset_agent_detection();
     }

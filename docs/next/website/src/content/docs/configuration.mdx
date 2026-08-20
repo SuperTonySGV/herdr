@@ -300,7 +300,7 @@ Agent rows accept these built-in tokens:
 - `agent` — detected or reported agent display name.
 - `terminal_title` — latest OSC 0/2 terminal title after safety normalization.
 - `terminal_title_stripped` — the terminal title with one recognized leading activity or spinner glyph and its following whitespace removed.
-- `last_active` — time since the agent last changed state, in the compact form `now`, `27m`, `17h`, `3d`. A working agent always reads `now`. Placed last in a row it is pinned to the sidebar's right edge; anywhere else it flows inline. Rows drop it before truncating the rest of the row, and an agent that has not changed state yet shows nothing.
+- `last_active` — time since the agent last did anything, in the compact form `now`, `27m`, `17h`, `3d`. Activity means the agent changed what is on screen, so an agent that chats for hours without its detected state ever moving still reads as current. A working agent always reads `now`. Placed last in a row it is pinned to the sidebar's right edge; anywhere else it flows inline. Rows drop it before truncating the rest of the row, and an agent that has not been seen doing anything yet shows nothing.
 - `$name` — custom pane metadata named `name`.
 
 `last_active` also colors itself by how long the agent has been idle, as a

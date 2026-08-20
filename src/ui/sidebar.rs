@@ -43,7 +43,7 @@ pub(crate) struct AgentPanelEntry {
     pub state: AgentState,
     pub seen: bool,
     pub last_agent_state_change_seq: Option<u64>,
-    pub last_agent_state_change_at: Option<std::time::Instant>,
+    pub last_active_at: Option<std::time::Instant>,
     pub state_labels: std::collections::HashMap<String, String>,
     pub tokens: std::collections::HashMap<String, String>,
 }
@@ -188,7 +188,7 @@ fn collect_agent_panel_entries_with_runtimes(
                         state: detail.state,
                         seen: detail.seen,
                         last_agent_state_change_seq: detail.last_agent_state_change_seq,
-                        last_agent_state_change_at: detail.last_agent_state_change_at,
+                        last_active_at: detail.last_active_at,
                         state_labels: detail.state_labels,
                         tokens: detail.tokens,
                     }
@@ -211,7 +211,7 @@ pub(crate) fn next_last_active_change(app: &AppState, now: std::time::Instant) -
     app.terminals
         .values()
         .filter_map(|terminal| {
-            let changed_at = terminal.last_agent_state_change_at?;
+            let changed_at = terminal.last_agent_active_at()?;
             let elapsed = now.saturating_duration_since(changed_at);
             let working = terminal.state == AgentState::Working;
             Some(last_active::next_change(elapsed, working, config))
@@ -2076,10 +2076,41 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
         let mut app = app_with_idle_agent(std::time::Duration::from_secs(60));
         for terminal in app.terminals.values_mut() {
             terminal.last_agent_state_change_at = None;
+            terminal.last_agent_activity_at = None;
         }
 
         let row = rendered_agent_row(&app, 20);
         assert_eq!(row.trim_end(), " claude");
+    }
+
+    #[test]
+    fn screen_activity_outranks_a_long_stale_state_change() {
+        // The bug this token was reported for: screen detection can hold a
+        // chatting agent at `idle` for hours, so counting from the last state
+        // change reads as abandoned while messages are still going back and
+        // forth.
+        let mut app = app_with_idle_agent(std::time::Duration::from_secs(6 * 60 * 60));
+        for terminal in app.terminals.values_mut() {
+            terminal.last_agent_activity_at =
+                Instant::now().checked_sub(std::time::Duration::from_secs(5));
+        }
+
+        let row = rendered_agent_row(&app, 20);
+        assert!(row.ends_with("now"), "rendered row: {row:?}");
+    }
+
+    #[test]
+    fn a_state_change_still_counts_when_it_is_the_newer_signal() {
+        // A hook can report a state change with nothing drawn on screen, so the
+        // two signals are read as whichever happened last.
+        let mut app = app_with_idle_agent(std::time::Duration::from_secs(60));
+        for terminal in app.terminals.values_mut() {
+            terminal.last_agent_activity_at =
+                Instant::now().checked_sub(std::time::Duration::from_secs(27 * 60));
+        }
+
+        let row = rendered_agent_row(&app, 20);
+        assert!(row.ends_with("1m"), "rendered row: {row:?}");
     }
 
     #[test]
