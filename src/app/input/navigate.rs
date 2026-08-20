@@ -1947,6 +1947,42 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_reseeded_pinned_space_keeps_the_directory_its_pane_was_in() {
+        // Pinning a space means pinning the repo you navigated it to. The space
+        // is created wherever the shell starts, and `cd`-ing into the repo is
+        // what makes it that repo -- label, branch and Git status all follow
+        // the live pane. Losing the pane must not snap the space back to the
+        // directory it was opened in.
+        let mut app = app_with_test_workspaces(&["pinned"]);
+        app.state.workspaces[0].pinned = true;
+        app.state.mode = Mode::Navigate;
+
+        // A real directory, since the replacement tab spawns a shell in it.
+        let cd_into = std::env::temp_dir();
+        assert_ne!(app.state.workspaces[0].identity_cwd, cd_into);
+        for terminal in app.state.terminals.values_mut() {
+            terminal.cwd = cd_into.clone();
+        }
+
+        app.execute_tui_navigate_action(NavigateAction::CloseTab, ActionContext::Navigate);
+
+        assert_eq!(
+            app.state.workspaces[0].identity_cwd, cd_into,
+            "the space should still be the repo its pane was sitting in"
+        );
+        let root_pane = app.state.workspaces[0].tabs[0].root_pane;
+        assert_eq!(
+            app.state.workspaces[0].tabs[0].cwd_for_pane(
+                root_pane,
+                &app.state.terminals,
+                &app.terminal_runtimes,
+            ),
+            Some(cd_into),
+            "and the replacement tab should open there, not where the space started"
+        );
+    }
+
+    #[tokio::test]
     async fn tui_close_last_tab_of_unpinned_space_still_closes_it() {
         let mut app = app_with_test_workspaces(&["plain"]);
         app.state.mode = Mode::Navigate;

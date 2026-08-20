@@ -146,9 +146,18 @@ impl App {
         if !ws.pinned {
             return false;
         }
-        // Pinning is anchored to the repo the space represents, not to whatever
-        // directory the dying pane happened to be sitting in.
-        let cwd = ws.identity_cwd.clone();
+        // The space's identity is wherever its pane actually is, not where the
+        // space was created: `cd`-ing into a repo is how a space becomes that
+        // repo, and the label, branch and Git status all follow the live pane.
+        // Adopt that as the identity before the pane goes away, or the space
+        // would snap back to the directory it was opened in and lose the repo
+        // the user pinned it for.
+        let cwd = ws
+            .resolved_identity_cwd_from(&self.state.terminals, &self.terminal_runtimes)
+            .unwrap_or_else(|| ws.identity_cwd.clone());
+        if let Some(ws) = self.state.workspaces.get_mut(ws_idx) {
+            ws.identity_cwd = cwd.clone();
+        }
         let (rows, cols) = self.state.estimate_pane_size();
         let default_shell = self.state.default_shell.clone();
         let scrollback_limit_bytes = self.state.pane_scrollback_limit_bytes;
