@@ -35,6 +35,10 @@ git checkout -- .
 Then copy `local/` back to `.local/` in the clone, and `bin/herdr-update.cmd` to
 a directory on PATH (`C:\Users\Anthony\tools`).
 
+For the theme, sidebar and font setup, follow `local/UI-SETUP.md` — it restores
+`herdr-config.toml` and the Windows Terminal profile, and explains what each
+override is working around.
+
 Recreate the update check with a logon (5 minute delay) and daily noon trigger:
 
 ```powershell
@@ -64,6 +68,9 @@ Build prerequisites: Rust 1.96.1 (rustup honours `rust-toolchain.toml`), Zig
 | `local/run-sync-logged.ps1` | Wrapper adding UTF-8 logging. What `herdr-update` calls. |
 | `local/env.ps1` | Build environment (PATH, `ZIG`). Dot-source before cargo. |
 | `local/PINNED-SPACES.md` | How the feature works, why, and its known limits. **Read the line-endings section.** |
+| `local/UI-SETUP.md` | Theme, sidebar and font setup: what was changed, why, and how to tune it. **Read before switching to a light theme.** |
+| `local/herdr-config.toml` | Copy of `%APPDATA%\herdr\config.toml`. Needs the pinned build — it uses the `last_active` sidebar token. |
+| `local/windows-terminal-herdr-profile.json` | The herdr profile + font, to merge into Windows Terminal's `settings.json`. |
 | `local/prd/` | Draft of the upstream Discussion, unposted. |
 | `bin/herdr-update.cmd` | The "yes, update" command. |
 

@@ -1,0 +1,94 @@
+onboarding = false
+
+[ui.toast]
+delivery = "off"
+
+[theme]
+name = "catppuccin"
+auto_switch = false
+light_name = "solarized-light"
+dark_name = "solarized-dark"
+
+[theme.custom]
+# Mauve accent (active tab / headers), matching the herdr.dev screenshot.
+accent = "#cba6f7"
+
+# Selection band behind the active space + active agent row.
+# src/ui/sidebar.rs paints that row with `bg(p.surface_dim)`, and catppuccin
+# ships surface_dim = #1e1e2e — all but identical to panel_bg #181825, so the
+# highlight was invisible. #2a2b3c sits between base and surface0 (#313244):
+# clearly lighter than the panel, still quiet enough not to shout.
+#
+# Caveat: surface_dim does double duty. As a *background* it is the selection
+# band; as a *foreground* it draws the sidebar hairline separators and the
+# scrollbar track, so both get slightly more visible with this change. That is
+# the same trade herdr.dev's screenshot makes. Push toward #313244 for a
+# stronger band, back toward #232334 for quieter separators.
+surface_dim = "#2a2b3c"
+
+[ui]
+show_agent_labels_on_pane_borders = true
+
+# herdr has no pinned workspaces: a space dies with its last pane. This rebuilds
+# the standard set on demand. Already-open spaces are skipped, so it is safe to
+# hit at any time. Single-quoted TOML so the backslashes stay literal.
+agent_panel_sort = "spaces"
+status_indicators = "symbols"
+[[keys.command]]
+key = "prefix+alt+p"
+type = "shell"
+command = 'powershell -NoProfile -ExecutionPolicy Bypass -File "C:\Users\Anthony\tools\herdr-spaces.ps1"'
+
+# Added when the patched (pinned-spaces) herdr build was installed.
+# herdr update would overwrite the patched binary with an official release,
+# so update checking is off. Updates arrive via .local\sync-and-install.ps1 in
+# C:\Users\Anthony\source\repos\herdr, which rebases the patch onto upstream
+# and rebuilds. Delete this section to go back to stock auto-updates.
+[update]
+version_check = false
+manifest_check = false
+
+# Sidebar agent rows, with the last_active elapsed/warmth token on the second
+# line. Requires the pinned build that added `last_active` (0.8.0-pinned.bf66c2a1
+# or later) — older servers reject it as an unknown token.
+#
+# STYLED TOKENS (added 2026-08-21, to match the herdr.dev hero screenshot).
+# A row entry is either a plain token name ("workspace") or an inline table
+# { token = "...", fg = "#rrggbb", bold = true/false, dim = true/false }.
+# All three style keys are optional and each one PATCHES the style the renderer
+# already chose for that token — omit a key and herdr's own choice stands.
+#
+# Why the patches below exist: src/ui/sidebar.rs hardcodes the secondary agent
+# style as `overlay0` + the DIM modifier, and it is NOT reachable from
+# [theme.custom] — no theme name or token override can undo the DIM. Windows
+# Terminal renders DIM by blending the foreground toward the background, so
+# catppuccin's overlay0 (#6c7086) collapses to near-invisible on the #1e1e2e
+# panel. `dim = false` removes the modifier; the explicit `fg` then sets the
+# grey directly instead of relying on a blend.
+#
+#   fg "#7f849c" = catppuccin overlay1 — the quieter of the two greys, for the
+#                  tab name, which is context rather than identity.
+#   fg "#9399b2" = catppuccin overlay2 — the agent name. Bump to subtext0
+#                  ("#a6adc8") if it still reads too quiet.
+#
+# `state_text` is left with no `fg` on purpose: the renderer colours it per
+# agent state (yellow working / red blocked / green done), and setting fg here
+# would flatten all three to one colour. It only needs `dim = false` so those
+# colours survive at full strength — that state colouring is what gives the
+# herdr.dev screenshot its look.
+#
+# `last_active` stays plain: as the final token in a row it gets pinned to the
+# right edge, and its own colour already encodes cache warmth.
+[ui.sidebar.agents]
+rows = [
+  [
+    "state_icon",
+    "workspace",
+    { token = "tab", fg = "#7f849c", dim = false },
+  ],
+  [
+    { token = "state_text", dim = false },
+    { token = "agent", fg = "#9399b2", dim = false },
+    "last_active",
+  ],
+]

@@ -1,0 +1,27 @@
+// The herdr profile from Windows Terminal's settings.json, extracted so it can
+// be restored on a fresh machine. Merge this object into the `profiles.list`
+// array of:
+//
+//   %LOCALAPPDATA%\Packages\Microsoft.WindowsTerminal_8wekyb3d8bbwe\LocalState\settings.json
+//
+// Keep the guid as-is so an existing profile is updated rather than duplicated.
+// The font face requires JetBrainsMono Nerd Font (see UI-SETUP.md for the
+// winget id); without it Windows Terminal silently falls back to Cascadia Mono.
+{
+    "commandline": "C:\Users\Anthony\AppData\Local\Programs\Herdr\bin\herdr.exe",
+    "font":
+    {
+        "face": "JetBrainsMono NFM",
+        "size": 14
+    },
+    "guid": "{7e1d9c4a-3b52-4f18-9a6d-2c8f5b0e7d31}",
+    "icon": "\ud83d\udc11",
+    "name": "herdr",
+    "startingDirectory": "C:\Users\Anthony"
+}
+
+// Also set, in `profiles.defaults`:
+//     "colorScheme": "Catppuccin Mocha"
+// herdr's palettes use `sidebar_bg: Color::Reset`, so the terminal background
+// shows through the sidebar. The terminal scheme and the herdr theme have to
+// agree on light-vs-dark or the sidebar is unreadable.
