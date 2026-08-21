@@ -171,11 +171,13 @@ function Invoke-GatedTests {
 # the six input-layer tests for last-tab close, because `pin` substring-matches
 # `pinned`. `context_menu` covers the Pin/Unpin entry and the close-by-label
 # selections that an upstream menu reorder would otherwise break silently.
+# `last_active` covers the sidebar's elapsed-time token: its formatting, the
+# repaint deadline, right-edge alignment, and the config parse.
 #
 # This is a narrow gate and should be read as one: it protects the patch, not
 # the whole binary.
 Write-Step 'Running unit tests for the patched behavior...'
-foreach ($filter in @('pin', 'context_menu')) {
+foreach ($filter in @('pin', 'context_menu', 'last_active')) {
     if (-not (Invoke-GatedTests -Label $filter -CargoArgs @('test', '--bins', $filter) -TimeoutMs 600000)) {
         Write-Warning "Not installing."
         exit 1
