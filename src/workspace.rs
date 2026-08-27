@@ -624,6 +624,37 @@ impl Workspace {
         Ok((self.tabs.len() - 1, terminal, runtime))
     }
 
+    /// Add a tab whose pane has no shell process yet.
+    ///
+    /// Mirrors `create_tab`, minus the spawn. Used to re-seed a pinned space
+    /// without paying for a shell nobody has asked for; the shell arrives when
+    /// the pane first becomes visible.
+    pub fn create_tab_cold(&mut self, cwd: PathBuf) -> (usize, TerminalState) {
+        let number = self.next_public_tab_number;
+        self.next_public_tab_number += 1;
+        let pane_number = self.next_public_pane_number;
+        // A workspace always has at least one tab here: `create_tab_cold` only
+        // ever runs against a live workspace that is about to lose a pane, so
+        // the hooks below are cloned from the tab that is still present.
+        let events = self
+            .active_tab()
+            .map(|tab| tab.events.clone())
+            .expect("workspace must always have at least one tab");
+        let render_notify = self
+            .active_tab()
+            .map(|tab| tab.render_notify.clone())
+            .expect("workspace must always have at least one tab");
+        let render_dirty = self
+            .active_tab()
+            .map(|tab| tab.render_dirty.clone())
+            .expect("workspace must always have at least one tab");
+
+        let (tab, terminal) = Tab::new_cold(number, cwd, events, render_notify, render_dirty);
+        self.register_new_pane_with_number(tab.root_pane, pane_number);
+        self.tabs.push(tab);
+        (self.tabs.len() - 1, terminal)
+    }
+
     pub fn close_tab(&mut self, idx: usize) -> bool {
         if self.tabs.len() <= 1 || idx >= self.tabs.len() {
             return false;

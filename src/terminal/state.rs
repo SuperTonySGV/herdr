@@ -161,6 +161,13 @@ pub struct TerminalState {
     pub respawn_shell_on_exit: bool,
     recent_agent_process_exit: Option<RecentAgentProcessExit>,
     pub pending_agent_resume_plan: Option<crate::agent_resume::AgentResumePlan>,
+    /// This terminal has no shell process yet and should get one the first time
+    /// its pane is visible.
+    ///
+    /// Set for panes of a pinned workspace that were restored (or re-seeded)
+    /// without being looked at. Unlike `pending_agent_resume_plan` there is no
+    /// command to replay -- the pane just needs a plain shell in `cwd`.
+    pub pending_cold_shell: bool,
 }
 
 impl TerminalState {
@@ -197,6 +204,7 @@ impl TerminalState {
             respawn_shell_on_exit: false,
             recent_agent_process_exit: None,
             pending_agent_resume_plan: None,
+            pending_cold_shell: false,
         }
     }
 
@@ -236,6 +244,11 @@ impl TerminalState {
     pub(crate) fn agent_process_exited_within(&self, now: Instant, max_age: Duration) -> bool {
         self.recent_agent_process_exit
             .is_some_and(|exit| now.saturating_duration_since(exit.observed_at) <= max_age)
+    }
+
+    pub fn with_pending_cold_shell(mut self) -> Self {
+        self.pending_cold_shell = true;
+        self
     }
 
     pub fn with_pending_agent_resume_plan(

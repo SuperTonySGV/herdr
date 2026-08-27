@@ -281,6 +281,11 @@ fn restore_with_imports_and_failures(
             render_notify: render_notify.clone(),
             render_dirty: render_dirty.clone(),
         };
+        // A pinned space that is not the one being restored *into* does not
+        // need its shells yet. It keeps its sidebar entry, label and cwd; the
+        // shell arrives if the user actually opens it. Unpinned spaces and the
+        // active space restore exactly as before, so what you land on is live.
+        let restore_cold = ws_snap.pinned && snapshot.active != Some(idx);
         let (restored, workspace_failed_imports) = restore_workspace(
             ws_snap,
             history.and_then(|history| history.workspaces.get(idx)),
@@ -289,6 +294,7 @@ fn restore_with_imports_and_failures(
             &runtime_context,
             &mut resumed_agent_sessions,
             imported_panes,
+            restore_cold,
         );
         failed_imports += workspace_failed_imports;
         if let Some((workspace, restored_terminals, restored_runtimes)) = restored {
@@ -311,6 +317,7 @@ fn restore_workspace(
     runtime_context: &RestoreRuntimeContext<'_>,
     resumed_agent_sessions: &mut HashSet<String>,
     imported_panes: &mut HashMap<u32, crate::handoff_runtime::ImportedHandoffRuntime>,
+    restore_cold: bool,
 ) -> RestoreFailures<Option<RestoredWorkspace>> {
     let mut tabs = Vec::new();
     let mut terminals = Vec::new();
@@ -366,6 +373,7 @@ fn restore_workspace(
             resumed_agent_sessions,
             imported_panes,
             &public_pane_ids_by_old_raw,
+            restore_cold,
         );
         failed_imports += tab_failed_imports;
         let Some((mut tab, restored_terminals, restored_runtimes, reverse_id_map)) = restored_tab
@@ -434,6 +442,7 @@ fn restore_workspace(
             resumed_agent_sessions,
             imported_panes,
             &public_pane_ids_by_old_raw,
+            restore_cold,
         );
         failed_imports += fallback_failed_imports;
         if let Some((tab, restored_terminals, restored_runtimes, _)) = restored_tab {
@@ -521,6 +530,7 @@ fn restore_tab(
     resumed_agent_sessions: &mut HashSet<String>,
     imported_panes: &mut HashMap<u32, crate::handoff_runtime::ImportedHandoffRuntime>,
     public_pane_ids_by_old_raw: &HashMap<u32, String>,
+    restore_cold: bool,
 ) -> RestoreFailures<Option<RestoredTab>> {
     let (node, id_map) = restore_node_remapped(&snap.layout);
     let reverse_id_map: HashMap<PaneId, u32> = id_map
@@ -627,6 +637,29 @@ fn restore_tab(
                     false,
                     std::time::Instant::now(),
                 );
+            }
+            panes.insert(*id, PaneState::new(terminal_id));
+            terminals.push(terminal);
+            continue;
+        }
+
+        // Cold restore for a pinned space nobody is looking at: build the pane
+        // and its terminal, but no shell. `start_cold_shells` spawns one when
+        // the pane first becomes visible.
+        //
+        // Ordered after the agent-resume branch on purpose -- a pane with an
+        // agent to bring back is that branch's business, and it has its own
+        // deferred spawn. Imported handoff panes are excluded too: they already
+        // own a live runtime that would be dropped on the floor here.
+        if restore_cold && !was_imported {
+            let terminal_id = TerminalId::alloc();
+            let mut terminal =
+                TerminalState::new(terminal_id.clone(), cwd.clone()).with_pending_cold_shell();
+            if let Some(label) = saved_label {
+                terminal.set_manual_label(label);
+            }
+            if let Some(session) = restored_agent_session {
+                terminal.set_persisted_agent_session(session);
             }
             panes.insert(*id, PaneState::new(terminal_id));
             terminals.push(terminal);
@@ -1316,6 +1349,208 @@ mod tests {
             workspaces.is_empty(),
             "unpinned spaces keep the existing drop behavior"
         );
+    }
+
+    /// Two pinned spaces, one active. Restore should bring the active one back
+    /// with a live shell and leave the background one cold.
+    ///
+    /// This is the whole point of the change: 16 pinned spaces used to mean 16
+    /// shells at every startup, whether or not any of them were opened.
+    fn two_pinned_spaces_snapshot(active: Option<usize>) -> SessionSnapshot {
+        let cwd = std::env::current_dir().unwrap();
+        let space = |id: &str| WorkspaceSnapshot {
+            pinned: true,
+            id: Some(id.into()),
+            custom_name: Some(id.into()),
+            identity_cwd: cwd.clone(),
+            worktree_space: None,
+            public_pane_numbers: HashMap::new(),
+            next_public_pane_number: 0,
+            public_tab_numbers: Vec::new(),
+            next_public_tab_number: 0,
+            tabs: vec![TabSnapshot {
+                custom_name: None,
+                layout: LayoutSnapshot::Pane(0),
+                panes: HashMap::from([(
+                    0,
+                    super::super::snapshot::PaneSnapshot {
+                        cwd: cwd.clone(),
+                        label: None,
+                        agent_name: None,
+                        managed_agent_kind: None,
+                        agent_session: None,
+                        launch_argv: None,
+                    },
+                )]),
+                zoomed: false,
+                focused: Some(0),
+                root_pane: Some(0),
+            }],
+            active_tab: 0,
+        };
+        SessionSnapshot {
+            version: super::super::snapshot::SNAPSHOT_VERSION,
+            workspaces: vec![space("front"), space("back")],
+            active,
+            selected: 0,
+            sidebar_width: None,
+            sidebar_section_split: None,
+            collapsed_space_keys: Default::default(),
+        }
+    }
+
+    fn restore_snapshot_full(
+        snapshot: &SessionSnapshot,
+    ) -> (
+        Vec<Workspace>,
+        HashMap<crate::terminal::TerminalId, crate::terminal::TerminalState>,
+        HashMap<crate::terminal::TerminalId, crate::terminal::TerminalRuntime>,
+    ) {
+        let (events, _event_rx) = mpsc::channel(4);
+        restore(
+            snapshot,
+            None,
+            24,
+            80,
+            0,
+            test_restore_shell(),
+            crate::config::ShellModeConfig::NonLogin,
+            false,
+            events,
+            Arc::new(Notify::new()),
+            Arc::new(RenderSignal::new()),
+        )
+    }
+
+    /// Returns (has_runtime, pending_cold_shell) for a workspace's root pane.
+    fn pane_liveness(
+        ws: &Workspace,
+        terminals: &HashMap<crate::terminal::TerminalId, crate::terminal::TerminalState>,
+        runtimes: &HashMap<crate::terminal::TerminalId, crate::terminal::TerminalRuntime>,
+    ) -> (bool, bool) {
+        let root = ws.tabs[0].root_pane;
+        let terminal_id = ws.tabs[0]
+            .panes
+            .get(&root)
+            .map(|pane| pane.attached_terminal_id.clone())
+            .expect("root pane must have a terminal");
+        (
+            runtimes.contains_key(&terminal_id),
+            terminals
+                .get(&terminal_id)
+                .is_some_and(|terminal| terminal.pending_cold_shell),
+        )
+    }
+
+    #[tokio::test]
+    async fn a_background_pinned_space_restores_without_a_shell() {
+        let (workspaces, terminals, runtimes) =
+            restore_snapshot_full(&two_pinned_spaces_snapshot(Some(0)));
+
+        assert_eq!(workspaces.len(), 2, "both pinned spaces should come back");
+
+        let (front_live, front_cold) = pane_liveness(&workspaces[0], &terminals, &runtimes);
+        assert!(
+            front_live,
+            "the active space must restore hot -- what you land on has to work"
+        );
+        assert!(!front_cold, "and must not be marked for a deferred shell");
+
+        let (back_live, back_cold) = pane_liveness(&workspaces[1], &terminals, &runtimes);
+        assert!(
+            !back_live,
+            "a pinned space nobody is looking at must not spawn a shell"
+        );
+        assert!(
+            back_cold,
+            "it should be marked so the shell starts when the pane is first seen"
+        );
+
+        // The sidebar entry is the point of the pin, and it must be intact
+        // without a process behind it.
+        assert!(workspaces[1].pinned);
+        assert_eq!(workspaces[1].custom_name.as_deref(), Some("back"));
+        assert_eq!(workspaces[1].tabs.len(), 1);
+        workspaces[1].assert_invariants_for_test();
+    }
+
+    #[tokio::test]
+    async fn a_cold_space_survives_a_save_and_restore_round_trip() {
+        // A cold pane has no runtime, so `cwd_for_pane` has to fall back to the
+        // TerminalState to snapshot it. If that ever regressed, a pinned space
+        // would quietly drift to the wrong directory across restarts -- and it
+        // would only show up on the *second* restart, which is a miserable bug
+        // to find.
+        let (workspaces, terminals, runtimes) =
+            restore_snapshot_full(&two_pinned_spaces_snapshot(Some(0)));
+        let expected_cwd = std::env::current_dir().unwrap();
+
+        let mut registry = crate::terminal::TerminalRuntimeRegistry::new();
+        for (terminal_id, runtime) in runtimes {
+            registry.insert(terminal_id, runtime);
+        }
+        let snapshot = super::super::snapshot::capture(
+            &workspaces,
+            &terminals,
+            &registry,
+            Some(0),
+            0,
+            0,
+            0.5,
+            Default::default(),
+        );
+
+        assert_eq!(snapshot.workspaces.len(), 2);
+        assert!(
+            snapshot.workspaces[1].pinned,
+            "the pin has to survive a save while cold"
+        );
+
+        let (again, terminals_again, runtimes_again) = restore_snapshot_full(&snapshot);
+        assert_eq!(again.len(), 2);
+
+        let (live, cold) = pane_liveness(&again[1], &terminals_again, &runtimes_again);
+        assert!(!live, "still nobody looking at it, so still no shell");
+        assert!(cold);
+
+        let root = again[1].tabs[0].root_pane;
+        let mut registry_again = crate::terminal::TerminalRuntimeRegistry::new();
+        for (terminal_id, runtime) in runtimes_again {
+            registry_again.insert(terminal_id, runtime);
+        }
+        assert_eq!(
+            again[1].tabs[0].cwd_for_pane(root, &terminals_again, &registry_again),
+            Some(expected_cwd),
+            "a cold pane must remember where it is meant to open"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_unpinned_background_space_still_restores_hot() {
+        // Cold restore is scoped to pinned spaces. An ordinary space is one the
+        // user opened for work, not a bookmark, so it keeps its shell.
+        let mut snapshot = two_pinned_spaces_snapshot(Some(0));
+        snapshot.workspaces[1].pinned = false;
+
+        let (workspaces, terminals, runtimes) = restore_snapshot_full(&snapshot);
+
+        let (live, cold) = pane_liveness(&workspaces[1], &terminals, &runtimes);
+        assert!(live, "unpinned spaces keep the existing restore behavior");
+        assert!(!cold);
+    }
+
+    #[tokio::test]
+    async fn with_no_active_space_every_pinned_space_restores_cold() {
+        // `active: None` means nothing is focused yet, so nothing is visible and
+        // nothing needs a shell. The first space the user opens spawns its own.
+        let (workspaces, terminals, runtimes) =
+            restore_snapshot_full(&two_pinned_spaces_snapshot(None));
+
+        for ws in &workspaces {
+            let (live, cold) = pane_liveness(ws, &terminals, &runtimes);
+            assert!(!live, "no space is visible, so none should have a shell");
+            assert!(cold);
+        }
     }
 
     #[tokio::test]

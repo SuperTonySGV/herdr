@@ -197,6 +197,48 @@ impl Tab {
         ))
     }
 
+    /// Build a tab whose pane has no shell process yet.
+    ///
+    /// The `TerminalState` is real and carries the pane's identity and cwd, so
+    /// the pane, tab and workspace are fully formed and every invariant that
+    /// wants "a workspace always has a tab" still holds. What is missing is the
+    /// `TerminalRuntime` — no PTY, no shell. `pending_cold_shell` marks it, and
+    /// the app spawns the shell the first time the pane is actually visible.
+    ///
+    /// This exists so a pinned space can hold its place in the sidebar without
+    /// paying for a shell it may never be used in. See `App::start_cold_shells`.
+    pub fn new_cold(
+        number: usize,
+        initial_cwd: PathBuf,
+        events: mpsc::Sender<AppEvent>,
+        render_notify: Arc<Notify>,
+        render_dirty: Arc<RenderSignal>,
+    ) -> (Self, TerminalState) {
+        let (layout, root_id) = TileLayout::new();
+        let terminal_id = TerminalId::alloc();
+        let terminal =
+            TerminalState::new(terminal_id.clone(), initial_cwd).with_pending_cold_shell();
+        let mut panes = HashMap::new();
+        panes.insert(root_id, PaneState::new(terminal_id));
+
+        (
+            Self {
+                custom_name: None,
+                number,
+                root_pane: root_id,
+                layout,
+                panes,
+                #[cfg(test)]
+                runtimes: HashMap::new(),
+                zoomed: false,
+                events,
+                render_notify,
+                render_dirty,
+            },
+            terminal,
+        )
+    }
+
     pub fn is_auto_named(&self) -> bool {
         self.custom_name.is_none()
     }

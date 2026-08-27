@@ -10,6 +10,7 @@ pub(crate) mod agent_view;
 mod agents;
 mod api;
 mod api_helpers;
+mod cold_pane;
 pub(crate) use api_helpers::limit_snapshot_lines;
 mod config_io;
 mod creation;
@@ -1103,7 +1104,9 @@ impl App {
                     )?;
                 }
                 self.sync_pending_agent_resume_deadline(now);
-                if self.start_pending_agent_resumes(self.pending_agent_resume_due(now)) {
+                if self.start_pending_agent_resumes(self.pending_agent_resume_due(now))
+                    | self.start_cold_shells()
+                {
                     self.render_dirty.request_generic();
                     self.render_notify.notify_one();
                 }

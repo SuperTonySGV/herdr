@@ -404,6 +404,10 @@ impl App {
             self.sync_pending_agent_resume_deadline(now);
             changed |= self.start_pending_agent_resumes(self.pending_agent_resume_due(now));
         }
+        // Cold panes spawn on visibility, not on a deadline, so this runs even
+        // when the geometry just changed -- a resize is often the frame where a
+        // pane first gets a usable size.
+        changed |= self.start_cold_shells();
         changed
     }
 

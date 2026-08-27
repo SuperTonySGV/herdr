@@ -1947,6 +1947,38 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_reseeded_pinned_space_gets_a_cold_tab_not_a_shell() {
+        // Re-seeding is what keeps a pinned space alive when its last pane goes.
+        // It should hold the space open, not silently start a shell the user
+        // never asked for -- closing an agent pane in a pinned space is a
+        // "put this away" gesture, and putting it away should cost nothing.
+        let mut app = app_with_test_workspaces(&["pinned"]);
+        app.state.workspaces[0].pinned = true;
+        app.state.mode = Mode::Navigate;
+
+        app.execute_tui_navigate_action(NavigateAction::CloseTab, ActionContext::Navigate);
+
+        assert_eq!(app.state.workspaces.len(), 1, "the space must survive");
+        assert_eq!(app.state.workspaces[0].tabs.len(), 1);
+
+        let root = app.state.workspaces[0].tabs[0].root_pane;
+        let terminal_id = app.state.workspaces[0].tabs[0]
+            .panes
+            .get(&root)
+            .map(|pane| pane.attached_terminal_id.clone())
+            .expect("the replacement tab must have a pane and terminal");
+
+        assert!(
+            app.terminal_runtimes.get(&terminal_id).is_none(),
+            "the replacement tab must not have spawned a shell"
+        );
+        assert!(
+            app.state.terminals[&terminal_id].pending_cold_shell,
+            "and it must be marked so the shell starts when the pane is seen"
+        );
+    }
+
+    #[tokio::test]
     async fn a_reseeded_pinned_space_keeps_the_directory_its_pane_was_in() {
         // Pinning a space means pinning the repo you navigated it to. The space
         // is created wherever the shell starts, and `cd`-ing into the repo is
@@ -1957,7 +1989,8 @@ mod tests {
         app.state.workspaces[0].pinned = true;
         app.state.mode = Mode::Navigate;
 
-        // A real directory, since the replacement tab spawns a shell in it.
+        // A real directory: the replacement tab is cold, but the cwd it
+        // records is what a later deferred shell will start in.
         let cd_into = std::env::temp_dir();
         assert_ne!(app.state.workspaces[0].identity_cwd, cd_into);
         for terminal in app.state.terminals.values_mut() {

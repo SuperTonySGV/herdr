@@ -158,51 +158,26 @@ impl App {
         if let Some(ws) = self.state.workspaces.get_mut(ws_idx) {
             ws.identity_cwd = cwd.clone();
         }
-        let (rows, cols) = self.state.estimate_pane_size();
-        let default_shell = self.state.default_shell.clone();
-        let scrollback_limit_bytes = self.state.pane_scrollback_limit_bytes;
-        let host_terminal_theme = self.state.host_terminal_theme;
-        let host_terminal_appearance = self.state.host_terminal_appearance;
-        let shell_mode = self.state.shell_mode;
-        let result = self
-            .state
-            .workspaces
-            .get_mut(ws_idx)
-            .ok_or_else(|| std::io::Error::other("workspace disappeared"))
-            .and_then(|ws| {
-                ws.create_tab(
-                    rows,
-                    cols,
-                    cwd,
-                    scrollback_limit_bytes,
-                    host_terminal_theme,
-                    host_terminal_appearance,
-                    crate::pane::PaneShellConfig::new(&default_shell, shell_mode),
-                    Vec::new(),
-                )
-            });
-        match result {
-            Ok((tab_idx, terminal, runtime)) => {
-                self.terminal_runtimes.insert(terminal.id.clone(), runtime);
-                self.state.terminals.insert(terminal.id.clone(), terminal);
-                self.state.remove_alias_shadowed_by_new_pane(
-                    self.state.workspaces[ws_idx].tabs[tab_idx].root_pane,
-                );
-                self.schedule_session_save();
-                self.emit_tab_created_events(ws_idx, tab_idx);
-                true
-            }
-            Err(err) => {
-                // Failing to spawn the replacement means we cannot keep the
-                // workspace alive; fall back to the normal close so we never
-                // leave a workspace without tabs.
-                tracing::warn!(
-                    error = %err,
-                    "failed to re-seed pinned workspace; falling back to closing it"
-                );
-                false
-            }
-        }
+        // The replacement tab is cold: it holds the space open in the sidebar
+        // with no shell behind it. Pinning says "keep this space around", not
+        // "keep a process around", and re-seeding used to spawn a shell the
+        // user never asked for -- once per pinned space, on every restore.
+        // `start_cold_shells` spawns it if and when the pane is looked at.
+        //
+        // This cannot fail, so unlike the old spawning path there is no case
+        // where a pinned space gets closed because its replacement would not
+        // start.
+        let Some(ws) = self.state.workspaces.get_mut(ws_idx) else {
+            return false;
+        };
+        let (tab_idx, terminal) = ws.create_tab_cold(cwd);
+        self.state.terminals.insert(terminal.id.clone(), terminal);
+        self.state.remove_alias_shadowed_by_new_pane(
+            self.state.workspaces[ws_idx].tabs[tab_idx].root_pane,
+        );
+        self.schedule_session_save();
+        self.emit_tab_created_events(ws_idx, tab_idx);
+        true
     }
 
     pub(super) fn handle_tab_focus(&mut self, id: String, target: TabTarget) -> String {
