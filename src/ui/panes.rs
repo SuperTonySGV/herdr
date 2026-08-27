@@ -431,20 +431,39 @@ fn pane_is_cold(
 /// A cold pane is indistinguishable from a hung one without this: both are an
 /// empty rectangle. The hint is the whole reason deferring a shell is
 /// acceptable UX rather than a bug report.
-fn render_cold_pane_hint(frame: &mut Frame, info: &PaneInfo) {
-    const HINT: &str = "Press enter to start a new shell";
+/// The widest hint that fits, or None when even the shortest will not.
+///
+/// A vertical split easily takes a pane under 32 columns, and dropping the hint
+/// there would restore the blank-pane ambiguity in exactly the layout where it
+/// is hardest to guess what is going on.
+fn cold_pane_hint(width: u16) -> Option<&'static str> {
+    const HINTS: [&str; 4] = [
+        "Press enter to start a new shell",
+        "Press enter for a shell",
+        "enter to start",
+        "enter",
+    ];
 
+    HINTS.into_iter().find(|hint| hint.len() as u16 <= width)
+}
+
+fn render_cold_pane_hint(frame: &mut Frame, info: &PaneInfo) {
     let area = info.inner_rect;
-    if area.height == 0 || area.width < HINT.len() as u16 {
+    if area.height == 0 {
         return;
     }
+    let Some(hint) = cold_pane_hint(area.width) else {
+        return;
+    };
+
+    let width = hint.len() as u16;
     let y = area.y + area.height / 2;
-    let x = area.x + (area.width.saturating_sub(HINT.len() as u16)) / 2;
+    let x = area.x + (area.width - width) / 2;
 
     frame.render_widget(
-        ratatui::widgets::Paragraph::new(HINT)
+        ratatui::widgets::Paragraph::new(hint)
             .style(ratatui::style::Style::default().add_modifier(Modifier::DIM)),
-        Rect::new(x, y, HINT.len() as u16, 1),
+        Rect::new(x, y, width, 1),
     );
 }
 
@@ -1594,5 +1613,39 @@ mod tests {
             panic!("selection background should resolve to rgb");
         };
         assert!(relative_luminance((r, g, b)) > relative_luminance((12, 14, 16)));
+    }
+}
+
+#[cfg(test)]
+mod cold_hint_tests {
+    use super::*;
+
+    fn hint_for_width(width: u16) -> Option<&'static str> {
+        cold_pane_hint(width)
+    }
+
+    #[test]
+    fn a_wide_pane_gets_the_full_hint() {
+        assert_eq!(hint_for_width(80), Some("Press enter to start a new shell"));
+    }
+
+    #[test]
+    fn a_narrow_pane_gets_a_shorter_hint_rather_than_nothing() {
+        // A vertical split easily lands under 32 columns. Rendering nothing
+        // there would recreate the blank-pane ambiguity the hint exists to
+        // remove, in the layout where it is hardest to guess what is going on.
+        for width in [31, 24, 20, 15, 10, 5] {
+            let hint = hint_for_width(width)
+                .unwrap_or_else(|| panic!("width {width} must still say something"));
+            assert!(
+                hint.len() as u16 <= width,
+                "hint {hint:?} overflows a {width}-column pane"
+            );
+        }
+    }
+
+    #[test]
+    fn a_pane_too_narrow_for_any_hint_renders_nothing() {
+        assert_eq!(hint_for_width(4), None);
     }
 }

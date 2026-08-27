@@ -69,7 +69,7 @@ impl App {
         // A cold pane has no shell behind it, so nothing here could be
         // delivered anyway. Enter is what starts one; consume it so it does not
         // also arrive as a blank line at the new prompt.
-        if self.try_start_cold_shell_on_enter(&key_event) {
+        if self.try_start_cold_shell_on_enter(source_id, &key) {
             return None;
         }
         if self.try_copy_retained_selection(source_id, key.clone()) {

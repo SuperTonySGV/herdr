@@ -1627,6 +1627,13 @@ impl App {
         let Some((ws_idx, pane_id)) = self.parse_pane_id(&params.pane_id) else {
             return pane_not_found(id, &params.pane_id);
         };
+        // A cold pane has no runtime yet. Materialising it here is what keeps a
+        // deferred shell reachable from every client: the TUI starts one with
+        // Enter, an API client starts one by sending keys to the pane, and
+        // neither path is privileged over the other.
+        if self.lookup_runtime_sender(ws_idx, pane_id).is_none() {
+            self.start_cold_shell_for_pane(ws_idx, pane_id);
+        }
         let Some(runtime) = self.lookup_runtime_sender(ws_idx, pane_id) else {
             return pane_not_found(id, &params.pane_id);
         };
