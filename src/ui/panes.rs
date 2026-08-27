@@ -404,10 +404,48 @@ pub(super) fn render_panes(
                 true,
             );
             render_copy_mode_cursor(app, frame, info);
+        } else if pane_is_cold(app, ws, info.id) {
+            render_cold_pane_hint(frame, info);
         }
     }
 
     render_pane_borders(app, ws, pane_infos, split_borders, frame);
+}
+
+/// A pinned space's pane that is holding its place without a shell.
+///
+/// Distinct from "no runtime yet" in general: a pane can briefly lack a runtime
+/// while one is being built, and that must not flash a hint.
+fn pane_is_cold(
+    app: &AppState,
+    ws: &crate::workspace::Workspace,
+    pane_id: crate::layout::PaneId,
+) -> bool {
+    ws.terminal_id(pane_id)
+        .and_then(|terminal_id| app.terminals.get(terminal_id))
+        .is_some_and(|terminal| terminal.pending_cold_shell)
+}
+
+/// Tell the user the pane is waiting, not broken.
+///
+/// A cold pane is indistinguishable from a hung one without this: both are an
+/// empty rectangle. The hint is the whole reason deferring a shell is
+/// acceptable UX rather than a bug report.
+fn render_cold_pane_hint(frame: &mut Frame, info: &PaneInfo) {
+    const HINT: &str = "Press enter to start a new shell";
+
+    let area = info.inner_rect;
+    if area.height == 0 || area.width < HINT.len() as u16 {
+        return;
+    }
+    let y = area.y + area.height / 2;
+    let x = area.x + (area.width.saturating_sub(HINT.len() as u16)) / 2;
+
+    frame.render_widget(
+        ratatui::widgets::Paragraph::new(HINT)
+            .style(ratatui::style::Style::default().add_modifier(Modifier::DIM)),
+        Rect::new(x, y, HINT.len() as u16, 1),
+    );
 }
 
 pub(crate) fn popup_pane_rects(app: &AppState, area: Rect) -> Option<(Rect, Rect)> {

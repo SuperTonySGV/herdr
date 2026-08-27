@@ -17,8 +17,6 @@
 //! shell starts only when its pane is on screen — nothing to replay, and no
 //! reason to pay for a shell in a space the user never opens.
 
-use ratatui::layout::Rect;
-
 use super::App;
 
 struct ColdShellCandidate {
@@ -30,116 +28,87 @@ struct ColdShellCandidate {
 }
 
 impl App {
-    pub(crate) fn has_cold_shells(&self) -> bool {
-        self.state
-            .terminals
-            .values()
-            .any(|terminal| terminal.pending_cold_shell)
-    }
-
-    /// Spawn shells for any cold panes that are currently visible.
+    /// Enter on a cold pane starts its shell and is swallowed.
     ///
-    /// Returns true when at least one shell started, so the caller can mark the
-    /// frame dirty.
-    pub(crate) fn start_cold_shells(&mut self) -> bool {
-        if !self.has_cold_shells() {
+    /// Swallowing matters: the keystroke that starts the shell must not also
+    /// land in it as a stray blank line at a fresh prompt.
+    pub(crate) fn try_start_cold_shell_on_enter(
+        &mut self,
+        key: &crossterm::event::KeyEvent,
+    ) -> bool {
+        if key.code != crossterm::event::KeyCode::Enter
+            || !key.modifiers.is_empty()
+            || key.kind != crossterm::event::KeyEventKind::Press
+        {
             return false;
         }
-        let mut changed = false;
-        for ColdShellCandidate {
+        self.start_focused_cold_shell()
+    }
+
+    /// Start the focused pane's deferred shell.
+    ///
+    /// Returns true when a shell started, so the caller can swallow the
+    /// keystroke and mark the frame dirty.
+    pub(crate) fn start_focused_cold_shell(&mut self) -> bool {
+        let Some(ColdShellCandidate {
             pane_id,
             terminal_id,
             cwd,
             rows,
             cols,
-        } in self.cold_shell_candidates()
-        {
-            if self.terminal_runtimes.get(&terminal_id).is_some() {
-                continue;
-            }
-            changed |= self.start_cold_shell(pane_id, terminal_id, cwd, rows, cols);
-        }
-        if changed {
+        }) = self.focused_cold_pane()
+        else {
+            return false;
+        };
+        let started = self.start_cold_shell(pane_id, terminal_id, cwd, rows, cols);
+        if started {
             self.schedule_session_save();
         }
-        changed
+        started
     }
 
-    /// Cold panes that are on screen right now.
+    /// The focused pane, if it is cold and has somewhere to spawn.
+    fn focused_cold_pane(&self) -> Option<ColdShellCandidate> {
+        let ws_idx = self.state.active?;
+        let ws = self.state.workspaces.get(ws_idx)?;
+        let tab = ws.tabs.get(ws.active_tab_index())?;
+        let pane_id = tab.layout.focused();
+        let pane = tab.panes.get(&pane_id)?;
+        if self
+            .terminal_runtimes
+            .get(&pane.attached_terminal_id)
+            .is_some()
+        {
+            return None;
+        }
+        let terminal = self.state.terminals.get(&pane.attached_terminal_id)?;
+        if !terminal.pending_cold_shell {
+            return None;
+        }
+        let (rows, cols) = self.cold_pane_size(pane_id)?;
+        Some(ColdShellCandidate {
+            pane_id,
+            terminal_id: pane.attached_terminal_id.clone(),
+            cwd: terminal.cwd.clone(),
+            rows,
+            cols,
+        })
+    }
+
+    /// The size the deferred shell should spawn at.
     ///
-    /// Only the active workspace's active tab is considered: a cold pane in a
-    /// background space is exactly the case this feature exists to avoid
-    /// spawning. `view.pane_infos` is the geometry the renderer just used, so a
-    /// pane listed there is genuinely visible and has a real size to spawn at.
-    fn cold_shell_candidates(&self) -> Vec<ColdShellCandidate> {
-        let terminal_area = self.state.view.terminal_area;
-        if terminal_area.width == 0 || terminal_area.height == 0 {
-            return Vec::new();
-        }
-        let Some(ws_idx) = self.state.active else {
-            return Vec::new();
-        };
-        let Some(ws) = self.state.workspaces.get(ws_idx) else {
-            return Vec::new();
-        };
-        let Some(tab) = ws.tabs.get(ws.active_tab_index()) else {
-            return Vec::new();
-        };
-
-        let mut candidates = Vec::new();
-        for info in self.cold_shell_pane_infos(tab, terminal_area) {
-            let Some(pane) = tab.panes.get(&info.id) else {
-                continue;
-            };
-            if self
-                .terminal_runtimes
-                .get(&pane.attached_terminal_id)
-                .is_some()
-            {
-                continue;
-            }
-            let Some(terminal) = self.state.terminals.get(&pane.attached_terminal_id) else {
-                continue;
-            };
-            if !terminal.pending_cold_shell {
-                continue;
-            }
-            // A pane with a queued agent resume is agent_resume's job, not ours;
-            // spawning a bare shell here would race it and eat the resume.
-            if terminal.pending_agent_resume_plan.is_some() {
-                continue;
-            }
-            if info.inner_rect.height == 0 || info.inner_rect.width == 0 {
-                continue;
-            }
-            candidates.push(ColdShellCandidate {
-                pane_id: info.id,
-                terminal_id: pane.attached_terminal_id.clone(),
-                cwd: terminal.cwd.clone(),
-                rows: info.inner_rect.height,
-                cols: info.inner_rect.width,
-            });
-        }
-        candidates
-    }
-
-    fn cold_shell_pane_infos(
-        &self,
-        tab: &crate::workspace::Tab,
-        terminal_area: Rect,
-    ) -> Vec<crate::layout::PaneInfo> {
-        // Prefer the geometry the renderer actually used; fall back to deriving
-        // it when the view has not been painted yet (headless, or the very first
-        // frame after restore).
-        if !self.state.view.pane_infos.is_empty() {
-            return self.state.view.pane_infos.clone();
-        }
-        crate::ui::apply_pane_chrome(
-            tab.layout.panes(terminal_area),
-            self.state.pane_borders,
-            self.state.pane_gaps,
-            self.state.pane_outer_borders,
-        )
+    /// This is the geometry the renderer actually used, so a pane with an entry
+    /// here is on screen with a real size. No entry means nothing has been
+    /// painted yet and there is no honest size to spawn at.
+    fn cold_pane_size(&self, pane_id: crate::layout::PaneId) -> Option<(u16, u16)> {
+        let info = self
+            .state
+            .view
+            .pane_infos
+            .iter()
+            .find(|info| info.id == pane_id)?;
+        (info.inner_rect.height > 0 && info.inner_rect.width > 0)
+            .then_some((info.inner_rect.height, info.inner_rect.width))
     }
 
     fn start_cold_shell(
@@ -155,6 +124,14 @@ impl App {
             .find_pane(pane_id)
             .and_then(|(ws_idx, _)| self.pane_launch_env(ws_idx, pane_id, Vec::new()))
         else {
+            // Never silently: a pane that cannot build a launch env stays blank
+            // forever, and a blank pane with no log line is indistinguishable
+            // from a pane that is simply waiting.
+            tracing::warn!(
+                pane = pane_id.raw(),
+                terminal = %terminal_id,
+                "no launch env for cold pane; deferred shell cannot start"
+            );
             return false;
         };
 
@@ -217,100 +194,112 @@ mod tests {
         for terminal in app.state.terminals.values_mut() {
             terminal.pending_cold_shell = true;
         }
-        // A painted viewport, so candidates have somewhere to be.
         app.state.view.terminal_area = ratatui::layout::Rect::new(0, 0, 80, 24);
+        paint_focused_pane(&mut app);
         app
     }
 
-    fn candidate_terminal_ids(app: &App) -> Vec<crate::terminal::TerminalId> {
-        app.cold_shell_candidates()
-            .into_iter()
-            .map(|candidate| candidate.terminal_id)
-            .collect()
-    }
-
-    fn root_terminal_id(app: &App, ws_idx: usize) -> crate::terminal::TerminalId {
+    /// Give the focused pane the painted geometry `cold_pane_size` requires.
+    fn paint_focused_pane(app: &mut App) {
+        let Some(ws_idx) = app.state.active else {
+            return;
+        };
         let ws = &app.state.workspaces[ws_idx];
-        let root = ws.tabs[0].root_pane;
-        ws.tabs[0]
-            .panes
-            .get(&root)
-            .map(|pane| pane.attached_terminal_id.clone())
-            .expect("root pane must have a terminal")
+        let tab = &ws.tabs[ws.active_tab_index()];
+        let pane_id = tab.layout.focused();
+        app.state.view.pane_infos = vec![crate::layout::PaneInfo {
+            id: pane_id,
+            rect: ratatui::layout::Rect::new(0, 0, 80, 24),
+            inner_rect: ratatui::layout::Rect::new(0, 0, 80, 24),
+            scrollbar_rect: None,
+            borders: ratatui::widgets::Borders::NONE,
+            is_focused: true,
+        }];
     }
 
     #[tokio::test]
-    async fn only_the_visible_space_is_a_candidate() {
-        // The entire point: a cold pane in a space you are not looking at must
-        // stay cold. If this ever selects background spaces, pinning goes back
-        // to costing one shell per space at startup.
-        let app = app_with_cold_spaces(&["front", "back", "further-back"]);
+    async fn a_cold_focused_pane_can_be_started() {
+        // This is what puts the "press enter" hint on screen. If it ever
+        // reports false for a cold pane the pane looks broken rather than
+        // waiting -- which is exactly the bug that motivated the rewrite.
+        let mut app = app_with_cold_spaces(&["front"]);
 
-        let candidates = candidate_terminal_ids(&app);
-
-        assert_eq!(
-            candidates,
-            vec![root_terminal_id(&app, 0)],
-            "only the active space's pane should be spawned"
+        assert!(
+            app.start_focused_cold_shell(),
+            "a painted, focused, cold pane must be startable"
         );
     }
 
     #[tokio::test]
-    async fn switching_space_moves_the_candidate() {
-        let mut app = app_with_cold_spaces(&["front", "back"]);
-        app.state.active = Some(1);
-
-        assert_eq!(
-            candidate_terminal_ids(&app),
-            vec![root_terminal_id(&app, 1)],
-            "the space the user moved to is the one that needs a shell"
-        );
-    }
-
-    #[tokio::test]
-    async fn a_pane_that_is_not_cold_is_left_alone() {
+    async fn a_normal_pane_is_not_cold() {
         let mut app = app_with_cold_spaces(&["front"]);
         for terminal in app.state.terminals.values_mut() {
             terminal.pending_cold_shell = false;
         }
 
         assert!(
-            candidate_terminal_ids(&app).is_empty(),
+            !app.start_focused_cold_shell(),
             "a normal pane is not this module's business"
         );
-        assert!(!app.has_cold_shells());
     }
 
     #[tokio::test]
-    async fn a_pending_agent_resume_wins_over_a_cold_shell() {
-        // Both defer a spawn. If this module also spawned a bare shell for a
-        // pane with a queued resume, the two would race and the resume command
-        // could land in a shell that is about to be replaced.
-        let mut app = app_with_cold_spaces(&["front"]);
-        let terminal_id = root_terminal_id(&app, 0);
-        app.state
-            .terminals
-            .get_mut(&terminal_id)
-            .expect("terminal")
-            .pending_agent_resume_plan = Some(crate::agent_resume::AgentResumePlan {
-            agent: "claude".into(),
-            argv: vec!["claude".into(), "--resume".into()],
-            dedupe_key: "cold-pane-test".into(),
-        });
-
-        assert!(
-            candidate_terminal_ids(&app).is_empty(),
-            "agent_resume owns this pane"
-        );
-    }
-
-    #[tokio::test]
-    async fn an_unpainted_viewport_spawns_nothing() {
+    async fn an_unpainted_pane_has_no_size_to_spawn_at() {
         // Before the first frame there is no geometry, so a shell would have to
         // be spawned at a guessed size. Wait for a real one instead.
         let mut app = app_with_cold_spaces(&["front"]);
-        app.state.view.terminal_area = ratatui::layout::Rect::new(0, 0, 0, 0);
+        app.state.view.pane_infos.clear();
 
-        assert!(candidate_terminal_ids(&app).is_empty());
+        assert!(
+            !app.start_focused_cold_shell(),
+            "nothing should spawn without real geometry"
+        );
+    }
+
+    #[tokio::test]
+    async fn only_the_focused_pane_is_startable() {
+        // The whole point of the rewrite: being *looked at* must never spawn a
+        // shell. Only the focused pane, and only on an explicit start.
+        let mut app = app_with_cold_spaces(&["front", "back", "further-back"]);
+
+        // Backgrounded spaces stay cold no matter how many frames go by.
+        app.state.active = Some(1);
+        app.state.view.pane_infos.clear();
+        assert!(
+            !app.start_focused_cold_shell(),
+            "a space with no painted pane must not be startable"
+        );
+
+        let still_cold = app
+            .state
+            .terminals
+            .values()
+            .filter(|terminal| terminal.pending_cold_shell)
+            .count();
+        assert_eq!(still_cold, 3, "every space must still be cold");
+    }
+
+    #[tokio::test]
+    async fn starting_a_shell_clears_the_cold_flag() {
+        let mut app = app_with_cold_spaces(&["front"]);
+        let ws = &app.state.workspaces[0];
+        let tab = &ws.tabs[ws.active_tab_index()];
+        let pane_id = tab.layout.focused();
+        let terminal_id = tab.panes[&pane_id].attached_terminal_id.clone();
+
+        assert!(app.start_focused_cold_shell(), "the shell should start");
+
+        assert!(
+            !app.state.terminals[&terminal_id].pending_cold_shell,
+            "the hint must go away once the shell is running"
+        );
+        assert!(
+            app.terminal_runtimes.get(&terminal_id).is_some(),
+            "and the pane must now have a real runtime"
+        );
+        assert!(
+            !app.start_focused_cold_shell(),
+            "starting twice must not spawn a second shell"
+        );
     }
 }

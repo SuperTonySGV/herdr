@@ -1443,6 +1443,29 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_cold_restored_pane_has_a_public_pane_number() {
+        // `start_cold_shell` needs `pane_launch_env`, which walks
+        // public_workspace_id -> find_tab_index_for_pane -> public_tab_id ->
+        // public_pane_id. That last hop reads `public_pane_numbers`. If a cold
+        // pane is missing from that map the whole chain returns None and the
+        // shell silently never starts -- the pane just stays blank forever.
+        let (workspaces, _terminals, _runtimes) =
+            restore_snapshot_full(&two_pinned_spaces_snapshot(Some(0)));
+
+        let cold = &workspaces[1];
+        let root = cold.tabs[0].root_pane;
+
+        assert!(
+            cold.find_tab_index_for_pane(root).is_some(),
+            "the cold pane must be findable in a tab"
+        );
+        assert!(
+            cold.public_pane_number(root).is_some(),
+            "a cold pane must have a public pane number, or pane_launch_env              returns None and the deferred shell can never spawn"
+        );
+    }
+
+    #[tokio::test]
     async fn a_background_pinned_space_restores_without_a_shell() {
         let (workspaces, terminals, runtimes) =
             restore_snapshot_full(&two_pinned_spaces_snapshot(Some(0)));

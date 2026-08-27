@@ -1104,9 +1104,7 @@ impl App {
                     )?;
                 }
                 self.sync_pending_agent_resume_deadline(now);
-                if self.start_pending_agent_resumes(self.pending_agent_resume_due(now))
-                    | self.start_cold_shells()
-                {
+                if self.start_pending_agent_resumes(self.pending_agent_resume_due(now)) {
                     self.render_dirty.request_generic();
                     self.render_notify.notify_one();
                 }
