@@ -34,6 +34,21 @@ pub(super) fn encode_api_text(runtime: &crate::terminal::TerminalRuntime, text: 
     }
 }
 
+/// Check every key name without needing a runtime.
+///
+/// Callers use this to reject a bad request *before* materialising a cold
+/// pane. `encode_api_keys` can only report the same failure after it already
+/// holds a runtime, and by then the shell the request was going to be rejected
+/// for has already been paid for.
+pub(super) fn validate_api_keys(keys: &[String]) -> Result<(), String> {
+    for key in keys {
+        if parse_api_key(key).is_none() {
+            return Err(key.clone());
+        }
+    }
+    Ok(())
+}
+
 pub(super) fn encode_api_keys(
     runtime: &crate::terminal::TerminalRuntime,
     keys: &[String],
@@ -315,5 +330,29 @@ mod metadata_token_tests {
             .map(|index| (format!("key{index}"), Some("value".into())))
             .collect();
         assert!(normalize_metadata_tokens(too_many).is_err());
+    }
+}
+
+#[cfg(test)]
+mod validate_key_tests {
+    use super::*;
+
+    #[test]
+    fn a_good_key_list_validates() {
+        assert!(validate_api_keys(&["enter".to_string(), "tab".to_string()]).is_ok());
+    }
+
+    #[test]
+    fn a_bad_key_is_named_in_the_error() {
+        // The name is what the caller reports back as `unsupported key`, and it
+        // has to survive being checked without a runtime.
+        let err = validate_api_keys(&["enter".to_string(), "nonsense".to_string()])
+            .expect_err("an unknown key must fail validation");
+        assert_eq!(err, "nonsense");
+    }
+
+    #[test]
+    fn an_empty_key_list_validates() {
+        assert!(validate_api_keys(&[]).is_ok());
     }
 }

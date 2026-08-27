@@ -1506,6 +1506,7 @@ impl App {
         let Some((ws_idx, pane_id)) = self.parse_pane_id(&params.pane_id) else {
             return pane_not_found(id, &params.pane_id);
         };
+        self.ensure_pane_runtime(ws_idx, pane_id);
         let Some(runtime) = self.lookup_runtime_sender(ws_idx, pane_id) else {
             return pane_not_found(id, &params.pane_id);
         };
@@ -1524,6 +1525,12 @@ impl App {
         let Some((ws_idx, pane_id)) = self.parse_pane_id(&params.pane_id) else {
             return pane_not_found(id, &params.pane_id);
         };
+        // Validate before materialising: a request that cannot succeed must not
+        // leave a cold pane holding a shell it never asked for.
+        if let Err(key) = super::super::api_helpers::validate_api_keys(&params.keys) {
+            return encode_error(id, "invalid_key", format!("unsupported key {key}"));
+        }
+        self.ensure_pane_runtime(ws_idx, pane_id);
         let Some(runtime) = self.lookup_runtime_sender(ws_idx, pane_id) else {
             return pane_not_found(id, &params.pane_id);
         };
@@ -1627,13 +1634,12 @@ impl App {
         let Some((ws_idx, pane_id)) = self.parse_pane_id(&params.pane_id) else {
             return pane_not_found(id, &params.pane_id);
         };
-        // A cold pane has no runtime yet. Materialising it here is what keeps a
-        // deferred shell reachable from every client: the TUI starts one with
-        // Enter, an API client starts one by sending keys to the pane, and
-        // neither path is privileged over the other.
-        if self.lookup_runtime_sender(ws_idx, pane_id).is_none() {
-            self.start_cold_shell_for_pane(ws_idx, pane_id);
+        // Validate before materialising: a request that cannot succeed must not
+        // leave a cold pane holding a shell it never asked for.
+        if let Err(key) = super::super::api_helpers::validate_api_keys(&params.keys) {
+            return encode_error(id, "invalid_key", format!("unsupported key {key}"));
         }
+        self.ensure_pane_runtime(ws_idx, pane_id);
         let Some(runtime) = self.lookup_runtime_sender(ws_idx, pane_id) else {
             return pane_not_found(id, &params.pane_id);
         };
@@ -1975,6 +1981,56 @@ mod tests {
             crate::terminal::TerminalRuntime::test_with_channel_capacity(80, 24, capacity);
         app.state.insert_test_runtime(pane_id, runtime);
         (app, public_pane_id, rx)
+    }
+
+    /// A workspace whose pane is cold: a terminal, no runtime.
+    fn app_with_cold_pane() -> (App, String, crate::terminal::TerminalId) {
+        let (mut app, public_pane_id) = app_with_test_workspace();
+        let pane_id = app.state.workspaces[0].tabs[0].root_pane;
+        let terminal_id = app.state.workspaces[0].tabs[0].panes[&pane_id]
+            .attached_terminal_id
+            .clone();
+        app.terminal_runtimes.remove(&terminal_id);
+        app.state
+            .terminals
+            .get_mut(&terminal_id)
+            .expect("terminal")
+            .pending_cold_shell = true;
+        (app, public_pane_id, terminal_id)
+    }
+
+    #[tokio::test]
+    async fn an_invalid_key_leaves_a_cold_pane_cold() {
+        // Spawning before validating meant a typo'd key name returned
+        // `invalid_key` *and* permanently charged the pane a shell process --
+        // the exact cost a cold pane exists to avoid. A unit test on
+        // validate_api_keys cannot catch this; only the ordering inside the
+        // handler can.
+        let (mut app, pane_id, terminal_id) = app_with_cold_pane();
+
+        let response = app.handle_api_request(crate::api::schema::Request {
+            id: "req".into(),
+            method: crate::api::schema::Method::PaneSendKeys(PaneSendKeysParams {
+                pane_id,
+                keys: vec!["definitely-not-a-key".into()],
+            }),
+        });
+
+        assert!(
+            response.contains("invalid_key"),
+            "the bad key must still be rejected: {response}"
+        );
+        assert!(
+            app.terminal_runtimes.get(&terminal_id).is_none(),
+            "no shell may be spawned for a request that failed validation"
+        );
+        assert!(
+            app.state
+                .terminals
+                .values()
+                .all(|terminal| terminal.pending_cold_shell),
+            "the pane must still be cold"
+        );
     }
 
     fn app_with_scrollback_runtime() -> (App, String, PaneId) {

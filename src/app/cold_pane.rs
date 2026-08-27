@@ -81,6 +81,17 @@ impl App {
         started
     }
 
+    /// Give a pane a runtime if it is cold, so a write can land in it.
+    ///
+    /// Every pane write method funnels through this. Doing it in only one of
+    /// them is how `herdr pane run` -- which routes to `pane.send_input` --
+    /// ended up unable to reach a restored pinned pane at all.
+    pub(crate) fn ensure_pane_runtime(&mut self, ws_idx: usize, pane_id: crate::layout::PaneId) {
+        if self.lookup_runtime_sender(ws_idx, pane_id).is_none() {
+            self.start_cold_shell_for_pane(ws_idx, pane_id);
+        }
+    }
+
     /// Start a named pane's deferred shell, wherever it lives.
     ///
     /// Deliberately not focus-scoped: an API client has no focus and no
@@ -423,6 +434,27 @@ mod tests {
         );
 
         assert!(!app.try_start_cold_shell_on_enter(crate::app::LOCAL_INPUT_SOURCE, &key));
+    }
+
+    #[tokio::test]
+    async fn ensure_pane_runtime_wakes_a_cold_pane_and_then_leaves_it_alone() {
+        // Every pane write method funnels through this one call, which is what
+        // makes `herdr pane run` (send_input) work against a restored pinned
+        // pane rather than only `send_keys`.
+        let mut app = app_with_cold_spaces(&["front"]);
+        let pane = app.state.workspaces[0].tabs[0].root_pane;
+        let terminal_id = root_terminal_id(&app, 0);
+
+        app.ensure_pane_runtime(0, pane);
+        assert!(
+            app.terminal_runtimes.get(&terminal_id).is_some(),
+            "a cold pane must gain a runtime"
+        );
+        assert!(!app.state.terminals[&terminal_id].pending_cold_shell);
+
+        // Idempotent: a second write to the same pane must not spawn again.
+        app.ensure_pane_runtime(0, pane);
+        assert!(app.terminal_runtimes.get(&terminal_id).is_some());
     }
 
     fn cold_count(app: &App) -> usize {
