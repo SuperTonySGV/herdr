@@ -3,6 +3,7 @@
 ## Unreleased
 
 ### Added
+- Remembered directories ("places") now live independently of pinned spaces: the New button opens a filterable picker of saved and recently used directories, unpinning a space saves its path instead of losing it, and `place.list`, `place.add`, `place.remove`, and `place.clear_recents` expose the list over the API. Configure with `spaces.new_opens_picker` and `spaces.remember_recents`.
 - Devin CLI, Cursor Agent CLI, MastraCode, Hermes Agent, and Grok CLI integrations now install and run natively on Windows.
 - Panes can now route normal right-click gestures to mouse-reporting applications through the pane menu, `herdr pane input`, `pane.input.set`, or the `pane split --right-click pane` launch option.
 - `theme.custom.sidebar_bg` can now give the desktop sidebar its own background without changing built-in theme defaults.

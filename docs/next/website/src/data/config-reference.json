@@ -1064,6 +1064,24 @@
       ]
     },
     {
+      "id": "spaces",
+      "title": "Spaces and places",
+      "keys": [
+        {
+          "key": "spaces.new_opens_picker",
+          "type": "boolean",
+          "default": "true",
+          "description": "Open a picker of remembered directories when a new space is requested, instead of creating one immediately. Set false to restore the previous immediate-create behaviour."
+        },
+        {
+          "key": "spaces.remember_recents",
+          "type": "boolean",
+          "default": "true",
+          "description": "Record directories spaces are opened at and closed from, so the picker can offer them again. Set false to write no recents at all; explicitly saved places are unaffected."
+        }
+      ]
+    },
+    {
       "id": "session",
       "title": "Session",
       "keys": [
