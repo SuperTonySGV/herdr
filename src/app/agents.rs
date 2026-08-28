@@ -175,14 +175,24 @@ impl App {
             .and_then(|workspace| workspace.terminal_id(pane_id))
             .cloned()
             .ok_or_else(|| AgentStartError::TargetNotFound(params.pane_id.clone()))?;
-        let terminal = self
-            .state
-            .terminals
-            .get(&terminal_id)
-            .ok_or_else(|| AgentStartError::TargetNotFound(params.pane_id.clone()))?;
-        if terminal.is_agent_terminal() || terminal.managed_agent_kind().is_some() {
+        let busy = {
+            let terminal = self
+                .state
+                .terminals
+                .get(&terminal_id)
+                .ok_or_else(|| AgentStartError::TargetNotFound(params.pane_id.clone()))?;
+            terminal.is_agent_terminal() || terminal.managed_agent_kind().is_some()
+        };
+        if busy {
             return Err(AgentStartError::TargetBusy(params.pane_id));
         }
+        // A restored pinned pane has no runtime until something asks for one.
+        // Every runtime-independent check above has passed, so this request is
+        // going to be honoured: materialise the shell rather than reporting the
+        // pane unavailable. Without this, `agent.start` against a cold pinned
+        // space returned `agent_pane_unavailable` with no way for a client to
+        // recover — the same gap the pane write paths already closed.
+        self.ensure_pane_runtime(ws_idx, pane_id);
         let runtime = self
             .terminal_runtimes
             .get(&terminal_id)

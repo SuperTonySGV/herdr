@@ -1506,6 +1506,11 @@ impl App {
         let Some((ws_idx, pane_id)) = self.parse_pane_id(&params.pane_id) else {
             return pane_not_found(id, &params.pane_id);
         };
+        // Nothing to send means nothing to send it to: an empty request must not
+        // be what buys a cold pane its shell.
+        if params.text.is_empty() {
+            return encode_success(id, ResponseResult::Ok {});
+        }
         self.ensure_pane_runtime(ws_idx, pane_id);
         let Some(runtime) = self.lookup_runtime_sender(ws_idx, pane_id) else {
             return pane_not_found(id, &params.pane_id);
@@ -1529,6 +1534,11 @@ impl App {
         // leave a cold pane holding a shell it never asked for.
         if let Err(key) = super::super::api_helpers::validate_api_keys(&params.keys) {
             return encode_error(id, "invalid_key", format!("unsupported key {key}"));
+        }
+        // `keys` and `text` both default to empty, so the zero-argument request
+        // is the easy one to send by accident. It must not cost a shell.
+        if params.text.is_empty() && params.keys.is_empty() {
+            return encode_success(id, ResponseResult::Ok {});
         }
         self.ensure_pane_runtime(ws_idx, pane_id);
         let Some(runtime) = self.lookup_runtime_sender(ws_idx, pane_id) else {
@@ -1638,6 +1648,11 @@ impl App {
         // leave a cold pane holding a shell it never asked for.
         if let Err(key) = super::super::api_helpers::validate_api_keys(&params.keys) {
             return encode_error(id, "invalid_key", format!("unsupported key {key}"));
+        }
+        // An empty key list transmits nothing; spawning for it would charge a
+        // cold pane a shell no one asked for.
+        if params.keys.is_empty() {
+            return encode_success(id, ResponseResult::Ok {});
         }
         self.ensure_pane_runtime(ws_idx, pane_id);
         let Some(runtime) = self.lookup_runtime_sender(ws_idx, pane_id) else {
@@ -2031,6 +2046,82 @@ mod tests {
                 .all(|terminal| terminal.pending_cold_shell),
             "the pane must still be cold"
         );
+    }
+
+    /// Round 2 stopped an *invalid* request from charging a pane a shell, but an
+    /// empty one still did: `send_input` has both fields defaulting to empty, so
+    /// the zero-argument request -- the easy one to send by accident -- spawned a
+    /// shell and then transmitted nothing into it.
+    ///
+    /// One test per method on purpose. A loop over the three would share a single
+    /// assertion body and could pass while only one handler had the early return,
+    /// which is the trap the previous round's discarded test fell into.
+    fn assert_no_shell_and_no_error(
+        app: &App,
+        terminal_id: &crate::terminal::TerminalId,
+        response: &str,
+    ) {
+        assert!(
+            !response.contains("\"error\""),
+            "an empty write is a no-op, not a failure: {response}"
+        );
+        assert!(
+            app.terminal_runtimes.get(terminal_id).is_none(),
+            "no shell may be spawned for a request that transmits nothing: {response}"
+        );
+        assert!(
+            app.state
+                .terminals
+                .values()
+                .all(|terminal| terminal.pending_cold_shell),
+            "the pane must still be cold: {response}"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_empty_send_input_leaves_a_cold_pane_cold() {
+        let (mut app, pane_id, terminal_id) = app_with_cold_pane();
+
+        let response = app.handle_api_request(crate::api::schema::Request {
+            id: "req".into(),
+            method: crate::api::schema::Method::PaneSendInput(PaneSendInputParams {
+                pane_id,
+                text: String::new(),
+                keys: Vec::new(),
+            }),
+        });
+
+        assert_no_shell_and_no_error(&app, &terminal_id, &response);
+    }
+
+    #[tokio::test]
+    async fn an_empty_send_keys_leaves_a_cold_pane_cold() {
+        let (mut app, pane_id, terminal_id) = app_with_cold_pane();
+
+        let response = app.handle_api_request(crate::api::schema::Request {
+            id: "req".into(),
+            method: crate::api::schema::Method::PaneSendKeys(PaneSendKeysParams {
+                pane_id,
+                keys: Vec::new(),
+            }),
+        });
+
+        assert_no_shell_and_no_error(&app, &terminal_id, &response);
+    }
+
+    #[tokio::test]
+    async fn an_empty_send_text_leaves_a_cold_pane_cold() {
+        let (mut app, pane_id, terminal_id) = app_with_cold_pane();
+
+        let response = app.handle_api_request(crate::api::schema::Request {
+            id: "req".into(),
+            method: crate::api::schema::Method::PaneSendText(PaneSendTextParams {
+                pane_id,
+                text: String::new(),
+            }),
+        });
+
+        assert_no_shell_and_no_error(&app, &terminal_id, &response);
     }
 
     fn app_with_scrollback_runtime() -> (App, String, PaneId) {

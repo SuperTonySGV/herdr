@@ -110,6 +110,14 @@ pub struct PaneSnapshot {
     pub agent_session: Option<PaneAgentSessionSnapshot>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub launch_argv: Option<Vec<String>>,
+    /// The pane was waiting for an explicit start and never got one.
+    ///
+    /// Only the *active* space restores hot, so without this a pinned space you
+    /// merely glanced at came back with a shell after a restart: looking at it
+    /// made it active, and active meant live. Defaults false, so a snapshot
+    /// written before this field restores exactly as it used to.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub cold: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -365,6 +373,7 @@ fn capture_tab(
                     value: session.session_ref.value.clone(),
                 })
         });
+        let cold = terminal.is_some_and(|terminal| terminal.pending_cold_shell);
         panes.insert(
             id.raw(),
             PaneSnapshot {
@@ -374,6 +383,7 @@ fn capture_tab(
                 managed_agent_kind,
                 agent_session,
                 launch_argv,
+                cold,
             },
         );
     }
@@ -690,6 +700,7 @@ mod tests {
         panes.insert(
             0,
             PaneSnapshot {
+                cold: false,
                 cwd: PathBuf::from("/home/can/Projects/herdr"),
                 label: None,
                 agent_name: None,
@@ -701,6 +712,7 @@ mod tests {
         panes.insert(
             1,
             PaneSnapshot {
+                cold: false,
                 cwd: PathBuf::from("/home/can/Projects/website"),
                 label: Some("website".into()),
                 agent_name: None,
@@ -1250,6 +1262,7 @@ mod tests {
         panes.insert(
             0,
             PaneSnapshot {
+                cold: false,
                 cwd: PathBuf::from("/tmp/this-directory-does-not-exist-for-herdr-test"),
                 label: None,
                 agent_name: None,
@@ -1261,6 +1274,7 @@ mod tests {
         panes.insert(
             1,
             PaneSnapshot {
+                cold: false,
                 cwd: std::env::var("HOME")
                     .map(PathBuf::from)
                     .unwrap_or_else(|_| PathBuf::from("/tmp")),

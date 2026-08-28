@@ -283,9 +283,15 @@ fn restore_with_imports_and_failures(
         };
         // A pinned space that is not the one being restored *into* does not
         // need its shells yet. It keeps its sidebar entry, label and cwd; the
-        // shell arrives if the user actually opens it. Unpinned spaces and the
-        // active space restore exactly as before, so what you land on is live.
-        let restore_cold = ws_snap.pinned && snapshot.active != Some(idx);
+        // shell arrives if the user actually opens it.
+        //
+        // The active space normally restores hot, so what you land on is live --
+        // but not if it was still waiting for its explicit start when the
+        // snapshot was taken. Browsing to a pinned space makes it active, and
+        // without this check a glance bought a shell on the next restart, which
+        // is the cost cold panes exist to avoid.
+        let restore_cold = ws_snap.pinned
+            && (snapshot.active != Some(idx) || workspace_was_entirely_cold(ws_snap));
         let (restored, workspace_failed_imports) = restore_workspace(
             ws_snap,
             history.and_then(|history| history.workspaces.get(idx)),
@@ -307,6 +313,26 @@ fn restore_with_imports_and_failures(
     }
     crate::workspace::reserve_workspace_ids(&workspaces);
     ((workspaces, terminals, terminal_runtimes), failed_imports)
+}
+
+/// Whether every pane in the space was still waiting for its explicit start.
+///
+/// Deliberately "entirely", not "any": a space with one live shell and one cold
+/// pane is a space you were working in, and landing on it dead would be worse
+/// than the one shell it costs. A space with no panes at all is not cold -- it
+/// has nothing to defer, and treating it as cold would suppress the reseeded
+/// shell a pinned space is supposed to get.
+fn workspace_was_entirely_cold(ws_snap: &crate::persist::snapshot::WorkspaceSnapshot) -> bool {
+    let mut saw_pane = false;
+    for tab in &ws_snap.tabs {
+        for pane in tab.panes.values() {
+            saw_pane = true;
+            if !pane.cold {
+                return false;
+            }
+        }
+    }
+    saw_pane
 }
 
 fn restore_workspace(
@@ -419,6 +445,7 @@ fn restore_workspace(
             panes: HashMap::from([(
                 1,
                 super::snapshot::PaneSnapshot {
+                    cold: false,
                     cwd: fallback_cwd,
                     label: None,
                     agent_name: None,
@@ -1374,6 +1401,7 @@ mod tests {
                 panes: HashMap::from([(
                     0,
                     super::super::snapshot::PaneSnapshot {
+                        cold: false,
                         cwd: cwd.clone(),
                         label: None,
                         agent_name: None,
@@ -1463,6 +1491,56 @@ mod tests {
             cold.public_pane_number(root).is_some(),
             "a cold pane must have a public pane number, or pane_launch_env              returns None and the deferred shell can never spawn"
         );
+    }
+
+    /// Mark every pane in the snapshot as still waiting for its explicit start.
+    fn mark_all_panes_cold(snapshot: &mut SessionSnapshot) {
+        for ws in &mut snapshot.workspaces {
+            for tab in &mut ws.tabs {
+                for pane in tab.panes.values_mut() {
+                    pane.cold = true;
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_glanced_at_pinned_space_does_not_restore_hot() {
+        // Browsing to a cold pinned space makes it the active space, and the
+        // active space restores hot. So without the recorded cold flag, merely
+        // looking at a pinned space bought it a shell on the next restart --
+        // undoing exactly what explicit start was built to prevent, one restart
+        // later and far from the cause.
+        let mut snapshot = two_pinned_spaces_snapshot(Some(0));
+        mark_all_panes_cold(&mut snapshot);
+
+        let (workspaces, terminals, runtimes) = restore_snapshot_full(&snapshot);
+
+        let (front_live, front_cold) = pane_liveness(&workspaces[0], &terminals, &runtimes);
+        assert!(
+            !front_live,
+            "a space that was never started must not come back with a shell just \
+             because it was the last one looked at"
+        );
+        assert!(
+            front_cold,
+            "it must still be waiting for its explicit start"
+        );
+        // The pin itself is untouched: this is about the shell, not the entry.
+        assert!(workspaces[0].pinned);
+        assert_eq!(workspaces[0].custom_name.as_deref(), Some("front"));
+        workspaces[0].assert_invariants_for_test();
+    }
+
+    #[tokio::test]
+    async fn a_snapshot_without_cold_flags_restores_the_active_space_hot() {
+        // Snapshots written before the flag existed have `cold: false`
+        // everywhere, and must keep the old behaviour rather than silently
+        // becoming dead spaces on the first restart after upgrading.
+        let (workspaces, terminals, runtimes) =
+            restore_snapshot_full(&two_pinned_spaces_snapshot(Some(0)));
+        let (front_live, _) = pane_liveness(&workspaces[0], &terminals, &runtimes);
+        assert!(front_live, "an old snapshot must still restore hot");
     }
 
     #[tokio::test]
@@ -1593,6 +1671,7 @@ mod tests {
             panes: HashMap::from([(
                 0,
                 super::super::snapshot::PaneSnapshot {
+                    cold: false,
                     cwd: missing,
                     label: None,
                     agent_name: None,
@@ -1633,6 +1712,7 @@ mod tests {
                     panes: HashMap::from([(
                         0,
                         super::super::snapshot::PaneSnapshot {
+                            cold: false,
                             cwd,
                             label: Some("reviewer".into()),
                             agent_name: Some("reviewer".into()),
@@ -1720,6 +1800,7 @@ mod tests {
                         (
                             10,
                             super::super::snapshot::PaneSnapshot {
+                                cold: false,
                                 cwd: cwd.clone(),
                                 label: None,
                                 agent_name: None,
@@ -1731,6 +1812,7 @@ mod tests {
                         (
                             20,
                             super::super::snapshot::PaneSnapshot {
+                                cold: false,
                                 cwd: cwd.clone(),
                                 label: None,
                                 agent_name: None,
@@ -1784,6 +1866,7 @@ mod tests {
             (
                 id.parse::<u32>().unwrap(),
                 super::super::snapshot::PaneSnapshot {
+                    cold: false,
                     cwd: cwd.clone(),
                     label: None,
                     agent_name: None,
@@ -1794,6 +1877,7 @@ mod tests {
             )
         };
         let final_pane = super::super::snapshot::PaneSnapshot {
+            cold: false,
             cwd: cwd.clone(),
             label: Some("planner".into()),
             agent_name: Some("planner".into()),
@@ -1947,6 +2031,7 @@ mod tests {
                     panes: HashMap::from([(
                         0,
                         super::super::snapshot::PaneSnapshot {
+                            cold: false,
                             cwd,
                             label: None,
                             agent_name: None,
@@ -2113,6 +2198,7 @@ mod tests {
         panes.insert(
             0,
             super::super::snapshot::PaneSnapshot {
+                cold: false,
                 cwd: cwd.clone(),
                 label: None,
                 agent_name: None,
