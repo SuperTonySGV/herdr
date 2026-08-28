@@ -2709,8 +2709,16 @@ mod tests {
     fn workspace_name_prompt_suppresses_default_creation_while_pending() {
         let mut app = test_app();
         app.state.prompt_new_workspace_name = true;
-
+        // The picker now sits in front of the prompt, so reach the prompt the
+        // way a user does. The property under test is unchanged: nothing is
+        // created while a name is still pending.
         app.begin_tui_workspace_create("test.workspace.create");
+        assert_eq!(app.state.mode, Mode::SpacePicker);
+        assert!(
+            app.state.workspaces.is_empty(),
+            "the picker creates nothing"
+        );
+        app.accept_space_picker();
 
         assert_eq!(app.state.mode, Mode::RenameWorkspace);
         assert!(app.state.pending_workspace_create_cwd.is_some());

@@ -103,7 +103,11 @@ impl App {
     /// so failing the request the caller made would be worse than losing one
     /// recents entry -- a retried create would make a second workspace.
     pub(crate) fn record_recent_place(&mut self, path: &Path, label: Option<&str>) {
-        if !self.state.remember_recent_places {
+        // `--no-session` means this run leaves nothing behind, which has to
+        // include places: without this every test that creates a workspace
+        // writes a recent into the developer's own store. Same guard
+        // `schedule_session_save` uses, for the same reason.
+        if self.no_session || !self.state.remember_recent_places {
             return;
         }
         let now = SystemTime::now();
@@ -385,8 +389,19 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_recent_is_recorded_for_a_persisting_session() {
+        let (mut app, store) = app_with_store();
+        app.no_session = false;
+
+        app.record_recent_place(&std::env::current_dir().unwrap(), None);
+
+        assert_eq!(places::load(&store).unwrap().recents.len(), 1);
+    }
+
+    #[tokio::test]
     async fn recents_are_not_written_when_the_user_turned_them_off() {
         let (mut app, store) = app_with_store();
+        app.no_session = false;
         app.state.remember_recent_places = false;
 
         app.record_recent_place(&std::env::current_dir().unwrap(), None);
@@ -395,5 +410,17 @@ mod tests {
             places::load(&store).unwrap().recents.is_empty(),
             "remember_recents = false must write nothing at all"
         );
+    }
+
+    #[tokio::test]
+    async fn a_session_that_persists_nothing_writes_no_places_either() {
+        // Without this, every test that creates a workspace deposits a recent
+        // in whoever is running the suite -- their real store, not a temp one.
+        let (mut app, store) = app_with_store();
+        assert!(app.no_session, "the test App is built with --no-session");
+
+        app.record_recent_place(&std::env::current_dir().unwrap(), None);
+
+        assert!(places::load(&store).unwrap().recents.is_empty());
     }
 }
