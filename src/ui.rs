@@ -16,6 +16,7 @@ mod release_notes;
 mod scrollbar;
 mod settings;
 mod sidebar;
+mod space_picker;
 mod status;
 mod tab_surface;
 mod tabs;
@@ -457,6 +458,7 @@ pub fn render_with_runtime_registry(
         Mode::GlobalMenu => render_global_launcher_menu(app, frame),
         Mode::KeybindHelp => render_keybind_help_overlay(app, frame),
         Mode::Navigator => render_navigator_overlay(app, terminal_runtimes, frame),
+        Mode::SpacePicker => space_picker::render_space_picker_overlay(app, frame),
         Mode::Terminal => {}
     }
 }

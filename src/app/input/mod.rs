@@ -117,6 +117,7 @@ impl App {
                 Mode::Navigator => {
                     handle_navigator_key(&mut self.state, &self.terminal_runtimes, key_event)
                 }
+                Mode::SpacePicker => self.handle_space_picker_key_event(key_event),
                 Mode::Terminal => unreachable!(),
             },
         }
@@ -234,6 +235,10 @@ impl App {
                     return false;
                 }
                 insert_navigator_search_text(&mut self.state, &self.terminal_runtimes, text);
+                true
+            }
+            Mode::SpacePicker => {
+                crate::app::space_picker::insert_space_picker_text(&mut self.state, text);
                 true
             }
             Mode::KeybindHelp => {
@@ -397,6 +402,8 @@ impl App {
                     MouseAction::NewWorkspace => {
                         self.begin_tui_workspace_create("tui.mouse.workspace.create")
                     }
+                    MouseAction::AcceptSpacePicker => self.accept_space_picker(),
+                    MouseAction::CancelSpacePicker => self.cancel_space_picker(),
                     MouseAction::Settings(action) => match action {
                         SettingsAction::SaveTheme(name) => self.save_theme(&name),
                         SettingsAction::SaveStatusIndicators(style) => {

@@ -27,6 +27,10 @@ use super::{
 
 pub(super) enum MouseAction {
     NewWorkspace,
+    /// A row of the places picker was clicked; open it.
+    AcceptSpacePicker,
+    /// A click landed outside the picker.
+    CancelSpacePicker,
     Settings(SettingsAction),
     FocusWorkspace {
         ws_idx: usize,
@@ -173,6 +177,28 @@ impl AppState {
         }
 
         if self.mode == Mode::KeybindHelp {
+            return None;
+        }
+
+        // The picker is reached by clicking New, so it has to stay usable with
+        // the mouse: forcing the keyboard here would be a worse New button.
+        if self.mode == Mode::SpacePicker {
+            match mouse.kind {
+                MouseEventKind::ScrollUp => self.space_picker.move_selection(-1),
+                MouseEventKind::ScrollDown => self.space_picker.move_selection(1),
+                MouseEventKind::Down(MouseButton::Left) => {
+                    if let Some(index) = self.space_picker_row_at(mouse.column, mouse.row) {
+                        self.space_picker.selected = index;
+                        return Some(MouseAction::AcceptSpacePicker);
+                    }
+                    // A click outside the panel dismisses, matching every other
+                    // overlay in the app.
+                    if !self.space_picker_contains(mouse.column, mouse.row) {
+                        return Some(MouseAction::CancelSpacePicker);
+                    }
+                }
+                _ => {}
+            }
             return None;
         }
 

@@ -97,6 +97,18 @@ impl App {
     }
 
     pub(super) fn begin_tui_workspace_create(&mut self, request_id: &'static str) {
+        // The single funnel from both the New button and the keybinding, which
+        // is why the picker only has to be introduced here.
+        if self.state.new_opens_picker {
+            let follow_cwd = self.workspace_creation_source().and_then(|ws_idx| {
+                self.focused_pane_cwd_in_workspace(ws_idx)
+                    .or_else(|| self.seed_cwd_from_workspace(ws_idx))
+            });
+            let cwd = self.resolve_new_terminal_cwd(follow_cwd);
+            self.open_space_picker(cwd);
+            return;
+        }
+
         if self.state.prompt_new_workspace_name {
             let follow_cwd = self.workspace_creation_source().and_then(|ws_idx| {
                 self.focused_pane_cwd_in_workspace(ws_idx)

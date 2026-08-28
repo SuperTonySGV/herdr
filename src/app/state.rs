@@ -798,11 +798,15 @@ pub enum Mode {
     GlobalMenu,
     KeybindHelp,
     Navigator,
+    SpacePicker,
 }
 
 impl Mode {
     pub(crate) fn mouse_motion_changes_view(self) -> bool {
-        matches!(self, Self::GlobalMenu | Self::ContextMenu | Self::Navigator)
+        matches!(
+            self,
+            Self::GlobalMenu | Self::ContextMenu | Self::Navigator | Self::SpacePicker
+        )
     }
 
     /// Whether keys in this mode are commands/navigation (an ASCII input source is wanted) rather
@@ -1462,9 +1466,12 @@ pub struct AppState {
     pub show_agent_labels_on_pane_borders: bool,
     pub hide_tab_bar_when_single_tab: bool,
     pub tab_bar_position: TabBarPositionConfig,
+    pub space_picker: crate::app::space_picker::SpacePickerState,
     pub pane_history_persistence: bool,
     /// Record directories spaces are opened at, so they can be offered again.
     pub remember_recent_places: bool,
+    /// The New button opens the places picker rather than creating at once.
+    pub new_opens_picker: bool,
     /// Expose the focused pane's cursor anchor to the outer terminal even when
     /// the pane requested `?25l`. See `[experimental] reveal_hidden_cursor_for_cjk_ime`.
     pub reveal_hidden_cursor_for_cjk_ime: bool,
@@ -1830,8 +1837,10 @@ impl AppState {
             show_agent_labels_on_pane_borders: false,
             hide_tab_bar_when_single_tab: false,
             tab_bar_position: TabBarPositionConfig::Top,
+            space_picker: Default::default(),
             pane_history_persistence: false,
             remember_recent_places: true,
+            new_opens_picker: true,
             reveal_hidden_cursor_for_cjk_ime: false,
             cjk_ime_agent_filter_configured: false,
             cjk_ime_agents: Vec::new(),

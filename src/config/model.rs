@@ -927,12 +927,17 @@ pub struct SpacesConfig {
     /// offered again later. Default: true. Turning this off writes no recents at
     /// all; explicitly saved places are unaffected.
     pub remember_recents: bool,
+    /// Open a picker of remembered directories when a new space is requested,
+    /// instead of creating one immediately. Default: true. Set false to restore
+    /// the previous immediate-create behaviour.
+    pub new_opens_picker: bool,
 }
 
 impl Default for SpacesConfig {
     fn default() -> Self {
         Self {
             remember_recents: true,
+            new_opens_picker: true,
         }
     }
 }

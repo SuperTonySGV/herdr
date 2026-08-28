@@ -273,6 +273,57 @@ impl AppState {
         )
     }
 
+    /// A smaller panel than the navigator: this is a short list, and a
+    /// full-height overlay for six rows reads as a mode change rather than a
+    /// menu.
+    pub(crate) fn space_picker_popup_rect(&self) -> Rect {
+        let area = self.onboarding_full_area();
+        let width = area.width.saturating_mul(2) / 3;
+        let width = width.clamp(24.min(area.width), area.width);
+        let height = (area.height / 2).max(6).min(area.height);
+        Rect::new(
+            area.x + (area.width.saturating_sub(width)) / 2,
+            area.y + (area.height.saturating_sub(height)) / 2,
+            width,
+            height,
+        )
+    }
+
+    /// Where the picker's rows start, mirroring the renderer's layout: one
+    /// line of filter, one of separation.
+    fn space_picker_body_rect(&self) -> Rect {
+        let inner = Block::default()
+            .borders(Borders::ALL)
+            .inner(self.space_picker_popup_rect());
+        Rect::new(
+            inner.x,
+            inner.y.saturating_add(2),
+            inner.width,
+            inner.height.saturating_sub(3),
+        )
+    }
+
+    pub(crate) fn space_picker_contains(&self, col: u16, row: u16) -> bool {
+        let popup = self.space_picker_popup_rect();
+        col >= popup.x
+            && col < popup.x.saturating_add(popup.width)
+            && row >= popup.y
+            && row < popup.y.saturating_add(popup.height)
+    }
+
+    /// Which visible row a click landed on, if any.
+    pub(crate) fn space_picker_row_at(&self, col: u16, row: u16) -> Option<usize> {
+        let body = self.space_picker_body_rect();
+        if col < body.x || col >= body.x.saturating_add(body.width) {
+            return None;
+        }
+        if row < body.y || row >= body.y.saturating_add(body.height) {
+            return None;
+        }
+        let offset = usize::from(row - body.y);
+        (offset < self.space_picker.visible().len()).then_some(offset)
+    }
+
     pub(crate) fn navigator_inner_rect(&self) -> Rect {
         Block::default()
             .borders(Borders::ALL)

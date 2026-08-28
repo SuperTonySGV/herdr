@@ -22,6 +22,7 @@ mod popup;
 mod runtime;
 mod runtime_mutations;
 mod session;
+pub(crate) mod space_picker;
 pub mod state;
 mod terminal_targets;
 mod terminal_titles;
@@ -648,8 +649,10 @@ impl App {
             show_agent_labels_on_pane_borders: config.ui.show_agent_labels_on_pane_borders,
             hide_tab_bar_when_single_tab: config.ui.hide_tab_bar_when_single_tab,
             tab_bar_position: config.ui.tab_bar_position,
+            space_picker: Default::default(),
             pane_history_persistence: config.experimental.pane_history,
             remember_recent_places: config.spaces.remember_recents,
+            new_opens_picker: config.spaces.new_opens_picker,
             reveal_hidden_cursor_for_cjk_ime: config.experimental.reveal_hidden_cursor_for_cjk_ime,
             cjk_ime_agent_filter_configured: !config.experimental.cjk_ime_agents.is_empty(),
             cjk_ime_agents: parse_cjk_ime_agents(&config.experimental.cjk_ime_agents),
@@ -1900,6 +1903,9 @@ impl App {
             }
             Mode::Navigator => {
                 input::handle_navigator_key(&mut self.state, &self.terminal_runtimes, key_event);
+            }
+            Mode::SpacePicker => {
+                self.handle_space_picker_key_event(key_event);
             }
             Mode::Terminal => {
                 // Should not be called in terminal mode.
