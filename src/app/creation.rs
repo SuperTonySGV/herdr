@@ -343,6 +343,19 @@ impl App {
     }
 
     pub(crate) fn emit_workspace_open_events(&mut self, ws_idx: usize) {
+        // Every path that adds a workspace funnels through here -- the API
+        // create, both worktree paths, and pane-move-to-a-new-workspace -- and
+        // only one of them produces a `workspace.create` response. Hanging the
+        // recents hook off the response would have missed the other two.
+        if let Some(path) = self.seed_cwd_from_workspace(ws_idx) {
+            let label = self
+                .state
+                .workspaces
+                .get(ws_idx)
+                .and_then(|ws| ws.custom_name.clone());
+            self.record_recent_place(&path, label.as_deref());
+        }
+
         let workspace_info = self.workspace_info(ws_idx);
         let Some(tab) = self.tab_info(ws_idx, 0) else {
             return;

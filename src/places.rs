@@ -126,6 +126,7 @@ impl std::fmt::Display for StoreError {
 pub struct PlaceKey(String);
 
 impl PlaceKey {
+    #[cfg(test)]
     pub fn as_str(&self) -> &str {
         &self.0
     }

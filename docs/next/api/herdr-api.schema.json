@@ -3227,6 +3227,35 @@
         "PingParams": {
           "type": "object"
         },
+        "PlaceAddParams": {
+          "properties": {
+            "label": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "path": {
+              "description": "Must be absolute. The server is long-lived and its working directory is\nunrelated to the caller's, so there is no sane directory to resolve a\nrelative path against; clients expand before calling.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "path"
+          ],
+          "type": "object"
+        },
+        "PlaceRemoveParams": {
+          "properties": {
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "path"
+          ],
+          "type": "object"
+        },
         "PluginActionInvokeParams": {
           "properties": {
             "action_id": {
@@ -4758,6 +4787,70 @@
             },
             "params": {
               "$ref": "#/schemas/request/$defs/WorkspaceTarget"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "place.list",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/EmptyParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "place.add",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/PlaceAddParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "place.remove",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/PlaceRemoveParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "place.clear_recents",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/EmptyParams"
             }
           },
           "required": [
@@ -8073,6 +8166,38 @@
           ],
           "type": "object"
         },
+        "PlaceInfo": {
+          "properties": {
+            "label": {
+              "type": "string"
+            },
+            "missing": {
+              "description": "The path does not currently resolve. Reported rather than filtered:\ndropping an entry because a drive is unplugged is exactly the silent\nloss this feature exists to prevent.",
+              "type": "boolean"
+            },
+            "path": {
+              "type": "string"
+            },
+            "source": {
+              "$ref": "#/schemas/success_response/$defs/PlaceSourceInfo"
+            }
+          },
+          "required": [
+            "label",
+            "path",
+            "source",
+            "missing"
+          ],
+          "type": "object"
+        },
+        "PlaceSourceInfo": {
+          "description": "Where a remembered directory came from.\n\nNeutral names on purpose: this is a runtime fact, not a description of any\nUI surface that happens to render it.",
+          "enum": [
+            "explicit",
+            "promoted_from_pin"
+          ],
+          "type": "string"
+        },
         "PluginActionContext": {
           "enum": [
             "global",
@@ -8655,6 +8780,34 @@
           ],
           "type": "string"
         },
+        "RecentPlaceInfo": {
+          "properties": {
+            "label": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "last_used_unix": {
+              "description": "Seconds since the Unix epoch, so the wire format does not depend on the\nhost's clock representation.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "missing": {
+              "type": "boolean"
+            },
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "path",
+            "last_used_unix",
+            "missing"
+          ],
+          "type": "object"
+        },
         "ResponseResult": {
           "oneOf": [
             {
@@ -8762,6 +8915,32 @@
               "required": [
                 "type",
                 "workspaces"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "places": {
+                  "items": {
+                    "$ref": "#/schemas/success_response/$defs/PlaceInfo"
+                  },
+                  "type": "array"
+                },
+                "recents": {
+                  "items": {
+                    "$ref": "#/schemas/success_response/$defs/RecentPlaceInfo"
+                  },
+                  "type": "array"
+                },
+                "type": {
+                  "const": "place_list",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "places",
+                "recents"
               ],
               "type": "object"
             },

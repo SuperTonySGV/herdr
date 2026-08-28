@@ -7,6 +7,7 @@ mod integrations;
 mod layouts;
 mod pane_graphics;
 mod panes;
+mod places;
 pub(crate) mod plugins;
 mod responses;
 mod session;
@@ -1027,6 +1028,10 @@ impl App {
             Method::WorkspaceClose(target) => {
                 return self.handle_workspace_close(request.id, target)
             }
+            Method::PlaceList(_) => return self.handle_place_list(request.id),
+            Method::PlaceAdd(params) => return self.handle_place_add(request.id, params),
+            Method::PlaceRemove(params) => return self.handle_place_remove(request.id, params),
+            Method::PlaceClearRecents(_) => return self.handle_place_clear_recents(request.id),
             Method::WorktreeList(params) => return self.handle_worktree_list(request.id, params),
             Method::WorktreeCreate(params) => {
                 let _ = params;

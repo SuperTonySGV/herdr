@@ -1463,6 +1463,8 @@ pub struct AppState {
     pub hide_tab_bar_when_single_tab: bool,
     pub tab_bar_position: TabBarPositionConfig,
     pub pane_history_persistence: bool,
+    /// Record directories spaces are opened at, so they can be offered again.
+    pub remember_recent_places: bool,
     /// Expose the focused pane's cursor anchor to the outer terminal even when
     /// the pane requested `?25l`. See `[experimental] reveal_hidden_cursor_for_cjk_ime`.
     pub reveal_hidden_cursor_for_cjk_ime: bool,
@@ -1829,6 +1831,7 @@ impl AppState {
             hide_tab_bar_when_single_tab: false,
             tab_bar_position: TabBarPositionConfig::Top,
             pane_history_persistence: false,
+            remember_recent_places: true,
             reveal_hidden_cursor_for_cjk_ime: false,
             cjk_ime_agent_filter_configured: false,
             cjk_ime_agents: Vec::new(),

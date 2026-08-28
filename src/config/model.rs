@@ -322,6 +322,7 @@ pub struct Config {
     pub advanced: AdvancedConfig,
     pub experimental: ExperimentalConfig,
     pub remote: RemoteConfig,
+    pub spaces: SpacesConfig,
 }
 
 #[derive(Debug)]
@@ -915,6 +916,23 @@ impl Default for RemoteConfig {
     fn default() -> Self {
         Self {
             manage_ssh_config: true,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(default)]
+pub struct SpacesConfig {
+    /// Record every directory a space is opened at or closed from, so it can be
+    /// offered again later. Default: true. Turning this off writes no recents at
+    /// all; explicitly saved places are unaffected.
+    pub remember_recents: bool,
+}
+
+impl Default for SpacesConfig {
+    fn default() -> Self {
+        Self {
+            remember_recents: true,
         }
     }
 }

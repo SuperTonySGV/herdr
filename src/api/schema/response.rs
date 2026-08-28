@@ -11,6 +11,7 @@ use super::panes::{
     PaneMoveResult, PaneNeighborResult, PaneProcessInfo, PaneReadResult, PaneResizeResult,
     PaneSwapResult, PaneZoomResult,
 };
+use super::places::{PlaceInfo, RecentPlaceInfo};
 use super::plugins::{
     InstalledPluginInfo, PluginActionInfo, PluginCommandLogInfo, PluginInvocationContext,
     PluginPaneInfo,
@@ -61,6 +62,10 @@ pub enum ResponseResult {
     },
     WorkspaceList {
         workspaces: Vec<WorkspaceInfo>,
+    },
+    PlaceList {
+        places: Vec<PlaceInfo>,
+        recents: Vec<RecentPlaceInfo>,
     },
     WorktreeList {
         source: WorktreeSourceInfo,

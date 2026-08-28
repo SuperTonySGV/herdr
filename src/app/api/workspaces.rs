@@ -126,6 +126,41 @@ impl App {
         let Some(index) = self.parse_workspace_id(&params.workspace_id) else {
             return workspace_not_found(id, &params.workspace_id);
         };
+        if self.state.workspaces.get(index).is_none() {
+            return workspace_not_found(id, &params.workspace_id);
+        }
+
+        // Unpinning is the one direction that can lose something. A pin is how
+        // a path survives a restart, so dropping it without storing the path
+        // first is a silent deletion -- store it, and refuse the unpin if the
+        // store would not take it. Pinning has nothing to lose and is not
+        // gated.
+        if !params.pinned {
+            if let Some(path) = self
+                .seed_cwd_from_workspace(index)
+                .or_else(|| self.focused_pane_cwd_in_workspace(index))
+            {
+                let label = self
+                    .state
+                    .workspaces
+                    .get(index)
+                    .and_then(|ws| ws.custom_name.clone())
+                    .unwrap_or_else(|| crate::workspace::derive_label_from_cwd(&path));
+                if let Err(err) = self.promote_place_for_unpin(&path, &label) {
+                    return encode_error(
+                        id,
+                        "store_unavailable",
+                        format!(
+                            "left {} pinned: its path could not be saved, and unpinning \
+                             would lose it ({})",
+                            path.display(),
+                            err.reason()
+                        ),
+                    );
+                }
+            }
+        }
+
         let Some(ws) = self.state.workspaces.get_mut(index) else {
             return workspace_not_found(id, &params.workspace_id);
         };

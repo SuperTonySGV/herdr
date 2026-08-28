@@ -111,6 +111,9 @@ pub struct App {
     pub(crate) input_rx: Option<mpsc::Receiver<crate::raw_input::RawInputEvent>>,
     pub(crate) last_terminal_size: Option<(u16, u16)>,
     pub(crate) config_diagnostic_deadline: Option<Instant>,
+    /// Where remembered directories live. A field rather than a call so tests
+    /// can redirect it and never touch the real user's store.
+    pub(crate) places_path: std::path::PathBuf,
     pub(crate) toast_deadline: Option<Instant>,
     pub(crate) copy_feedback_deadline: Option<Instant>,
     pub(crate) last_api_notification_at: Option<Instant>,
@@ -646,6 +649,7 @@ impl App {
             hide_tab_bar_when_single_tab: config.ui.hide_tab_bar_when_single_tab,
             tab_bar_position: config.ui.tab_bar_position,
             pane_history_persistence: config.experimental.pane_history,
+            remember_recent_places: config.spaces.remember_recents,
             reveal_hidden_cursor_for_cjk_ime: config.experimental.reveal_hidden_cursor_for_cjk_ime,
             cjk_ime_agent_filter_configured: !config.experimental.cjk_ime_agents.is_empty(),
             cjk_ime_agents: parse_cjk_ime_agents(&config.experimental.cjk_ime_agents),
@@ -728,6 +732,7 @@ impl App {
 
         Self {
             config_diagnostic_deadline: None,
+            places_path: crate::places::places_path(),
             toast_deadline: None,
             copy_feedback_deadline: None,
             last_api_notification_at: None,

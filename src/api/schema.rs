@@ -5,6 +5,7 @@ pub mod common;
 pub mod events;
 pub mod integrations;
 pub mod panes;
+pub mod places;
 pub mod plugins;
 pub mod response;
 pub mod server;
@@ -18,6 +19,7 @@ pub use common::*;
 pub use events::*;
 pub use integrations::*;
 pub use panes::*;
+pub use places::*;
 pub use plugins::*;
 pub use response::*;
 pub use server::*;
@@ -83,6 +85,14 @@ pub enum Method {
     WorkspaceReportMetadata(WorkspaceReportMetadataParams),
     #[serde(rename = "workspace.close")]
     WorkspaceClose(WorkspaceTarget),
+    #[serde(rename = "place.list")]
+    PlaceList(EmptyParams),
+    #[serde(rename = "place.add")]
+    PlaceAdd(PlaceAddParams),
+    #[serde(rename = "place.remove")]
+    PlaceRemove(PlaceRemoveParams),
+    #[serde(rename = "place.clear_recents")]
+    PlaceClearRecents(EmptyParams),
     #[serde(rename = "worktree.list")]
     WorktreeList(WorktreeListParams),
     #[serde(rename = "worktree.create")]
